@@ -1,0 +1,17 @@
+.gradle/
+build/
+out/
+*.iml
+.idea/
+.vscode/
+
+*.log
+
+### macOS ###
+.DS_Store
+
+### Windows ###
+Thumbs.db
+
+### Local env ###
+.env

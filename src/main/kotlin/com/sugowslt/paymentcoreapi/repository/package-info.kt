@@ -1,0 +1,3 @@
+package com.sugowslt.paymentcoreapi.repository
+
+object RepositoryLayerPlaceholder
