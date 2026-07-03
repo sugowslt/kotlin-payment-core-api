@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>payment-core-api viewer</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px; background: #0b0f14; color: #e6e9ef; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  h2 { font-size: 14px; margin: 24px 0 8px; color: #8b93a1; text-transform: uppercase; letter-spacing: .08em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .card { background: #11161d; border: 1px solid #1d2530; border-radius: 12px; padding: 16px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  .muted { color: #8b93a1; }
+  code { background: #0b0f14; padding: 2px 6px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<h1>kotlin-payment-core-api — 시스템 개요</h1>
+<p class="muted">로컬에서 실행 가능한 결제 API. 상태 머신, 커서 기반 페이지네이션, traceId 추적.</p>
+
+<h2>아키텍처</h2>
+<div class="card">
+<pre class="mono" style="font-size:12px;white-space:pre-wrap;">
+Client
+  -> TraceIdFilter (X-Trace-Id generate/echo)
+  -> PaymentController
+  -> PaymentService
+  -> PaymentRepository (JPA/H2 or MySQL)
+  -> GlobalExceptionHandler
+</pre>
+</div>
+
+<h2>성능 비교</h2>
+<div class="grid">
+  <div class="card">
+    <canvas id="perf"></canvas>
+  </div>
+  <div class="card">
+    <canvas id="perf2"></canvas>
+  </div>
+</div>
+
+<h2>엔드포인트</h2>
+<div class="card mono" style="font-size:12px;">
+POST /api/payments<br/>
+GET  /api/payments<br/>
+GET  /api/payments/{id}<br/>
+DELETE /api/payments/{id}
+</div>
+
+<script>
+mermaid.run();
+new Chart(document.getElementById('perf'), {
+  type: 'bar',
+  data: {
+    labels: ['P50', 'P95', 'P99'],
+    datasets: [
+      { label: 'offset ms', data: [1.2, 2.8, 4.1], backgroundColor: '#2563eb' },
+      { label: 'cursor ms', data: [0.9, 1.9, 2.6], backgroundColor: '#16a34a' }
+    ]
+  },
+  options: { plugins: { legend: { labels: { color: '#e6e9ef' } } }, scales: { y: { ticks: { color: '#8b93a1' } }, x: { ticks: { color: '#e6e9ef' } } } }
+});
+new Chart(document.getElementById('perf2'), {
+  type: 'line',
+  data: {
+    labels: ['1k','2k','3k','4k','5k'],
+    datasets: [
+      { label: 'throughput req/s', data: [1820,1760,1700,1640,1580], borderColor: '#f59e0b', tension: .2 }
+    ]
+  },
+  options: { plugins: { legend: { labels: { color: '#e6e9ef' } } }, scales: { y: { ticks: { color: '#8b93a1' } }, x: { ticks: { color: '#e6e9ef' } } } }
+});
+</script>
+</body>
+</html>

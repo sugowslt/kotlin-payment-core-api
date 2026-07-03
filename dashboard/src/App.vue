@@ -308,8 +308,8 @@ onMounted(async () => {
 <template>
   <div class="hero">
     <div class="hero-copy">
-      <span class="eyebrow">Kotlin Backend Portfolio Showcase</span>
-      <h1>포트폴리오 대시보드</h1>
+      <span class="eyebrow">결제 API 운영 개요</span>
+      <h1>시스템 개요</h1>
       <p class="hero-description">
         결제 도메인, 주문·정산과 운영 흐름까지 한눈에
       </p>
@@ -324,17 +324,17 @@ onMounted(async () => {
 
   <div class="tabs">
     <button :class="['tab-button', { active: activeView === 'showcase' }]" @click="activeView = 'showcase'">
-      Portfolio Showcase
+      개요
     </button>
     <button :class="['tab-button', { active: activeView === 'payment-demo' }]" @click="activeView = 'payment-demo'">
-      Payment Live Demo
+      Payment Demo
     </button>
   </div>
 
   <template v-if="activeView === 'showcase'">
     <section class="section">
       <div class="section-header">
-        <h2>포트폴리오 구성</h2>
+        <h2>주요 구현</h2>
         <p class="meta">각 프로젝트의 역할과 구현 내용</p>
       </div>
 
@@ -367,7 +367,7 @@ onMounted(async () => {
           </div>
 
           <div class="detail-group">
-            <h4>함께 보면 좋은 포인트</h4>
+            <h4>운영 포인트</h4>
             <ul>
               <li v-for="item in project.evidence" :key="item">{{ item }}</li>
             </ul>
@@ -387,7 +387,7 @@ onMounted(async () => {
             <div class="timeline-dot"></div>
             <div>
               <strong>1. Payment Core API</strong>
-              <p>Payment Live Demo에서 결제를 생성하고 승인·취소까지 진행하면서, 사용자의 요청이 어떤 식으로 처리되는지 확인할 수 있습니다.</p>
+              <p>Payment Demo에서 결제를 생성하고 승인·취소까지 진행하면서, 사용자의 요청이 어떤 식으로 처리되는지 확인할 수 있습니다.</p>
             </div>
           </div>
           <div class="timeline-item">
@@ -409,7 +409,7 @@ onMounted(async () => {
 
       <article class="card">
         <div class="section-header compact">
-          <h2>포트폴리오 대시보드</h2>
+          <h2>시스템 개요</h2>
           <p class="meta">각 프로젝트별 호스트</p>
         </div>
 
@@ -426,7 +426,7 @@ onMounted(async () => {
 
   <template v-else>
     <div class="section-header">
-      <h2>Payment Live Demo Test</h2>
+      <h2>Payment Demo Test</h2>
       <p class="meta">결제 생성부터 승인, 취소까지 실제 API 흐름을 바로 확인할 수 있습니다.</p>
     </div>
 
