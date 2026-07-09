@@ -1,0 +1,6 @@
+# Project Context
+- Kotlin + Spring Boot backend
+- Use 32-char traceId via MDC and X-Trace-Id header
+- Use ApiErrorResponse and GlobalExceptionHandler from templates/, do not reimplement
+- Tests go in src/test/ and use SpringBootTest or MockMvc
+- Commit messages are short Korean summaries, no conventional prefixes
