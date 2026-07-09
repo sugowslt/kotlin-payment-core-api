@@ -1,0 +1,8 @@
+{
+  "name": "kotlin-payment-core-api",
+  "private": true,
+  "scripts": {
+    "dev": "node server.js viewer.html",
+    "start": "node server.js viewer.html"
+  }
+}
