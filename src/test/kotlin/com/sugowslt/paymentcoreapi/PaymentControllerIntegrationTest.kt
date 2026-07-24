@@ -338,7 +338,7 @@ class PaymentControllerIntegrationTest(
         val createdId = idRegex.find(createdJson)?.groupValues?.get(1)
             ?: throw IllegalStateException("cannot parse created payment id")
 
-        mockMvc.perform(post("/api/v1/payments/$createdId/approve"))
+        mockMvc.perform(post("/api/v1/payments/$createdId/approve").header("Idempotency-Key", "approve-request-1"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.id").value(createdId.toLong()))
             .andExpect(jsonPath("$.status").value("APPROVED"))
@@ -369,7 +369,7 @@ class PaymentControllerIntegrationTest(
         val createdId = idRegex.find(createdJson)?.groupValues?.get(1)
             ?: throw IllegalStateException("cannot parse created payment id")
 
-        mockMvc.perform(post("/api/v1/payments/$createdId/approve"))
+        mockMvc.perform(post("/api/v1/payments/$createdId/approve").header("Idempotency-Key", "cancel-approve-1"))
             .andExpect(status().isOk)
 
         mockMvc.perform(post("/api/v1/payments/$createdId/cancel"))
@@ -433,14 +433,53 @@ class PaymentControllerIntegrationTest(
         val createdId = idRegex.find(createdJson)?.groupValues?.get(1)
             ?: throw IllegalStateException("cannot parse created payment id")
 
-        mockMvc.perform(post("/api/v1/payments/$createdId/approve"))
+        mockMvc.perform(post("/api/v1/payments/$createdId/approve").header("Idempotency-Key", "approve-invalid-1"))
             .andExpect(status().isOk)
         mockMvc.perform(post("/api/v1/payments/$createdId/cancel"))
             .andExpect(status().isOk)
 
-        mockMvc.perform(post("/api/v1/payments/$createdId/approve"))
+        mockMvc.perform(post("/api/v1/payments/$createdId/approve").header("Idempotency-Key", "approve-invalid-2"))
             .andExpect(status().isConflict)
             .andExpect(jsonPath("$.code").value("INVALID_PAYMENT_STATUS_TRANSITION"))
+    }
+
+    @Test
+    fun `repeating approve request with same idempotency key returns the same approved payment`() {
+        val requestBody =
+            """
+            {
+              "orderId": 8010,
+              "idempotencyKey": "approve-retry-payment",
+              "amount": 12000.00,
+              "method": "CARD"
+            }
+            """.trimIndent()
+
+        val createResponse = mockMvc.perform(
+            post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(requestBody),
+        ).andExpect(status().isCreated).andReturn()
+
+        val createdId = "\"id\":(\\d+)".toRegex()
+            .find(createResponse.response.contentAsString)?.groupValues?.get(1)
+            ?: throw IllegalStateException("cannot parse created payment id")
+
+        val approvalKey = "approve-retry-key"
+        mockMvc.perform(
+            post("/api/v1/payments/$createdId/approve")
+                .header("Idempotency-Key", approvalKey),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.status").value("APPROVED"))
+
+        mockMvc.perform(
+            post("/api/v1/payments/$createdId/approve")
+                .header("Idempotency-Key", approvalKey),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.id").value(createdId.toLong()))
+            .andExpect(jsonPath("$.status").value("APPROVED"))
     }
 
     @Test

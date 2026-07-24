@@ -20,7 +20,6 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.math.BigDecimal
 import java.time.LocalDateTime
-import java.util.Optional
 
 class PaymentServiceTest {
 
@@ -45,7 +44,7 @@ class PaymentServiceTest {
                 method = PaymentMethod.CARD,
             )
 
-        every { paymentRepository.existsByIdempotencyKey("key-101") } returns false
+        every { paymentRepository.existsByIdempotencyKeyAndDeletedFalse("key-101") } returns false
         every { paymentRepository.save(any()) } returns
             Payment(
                 id = 1,
@@ -76,7 +75,7 @@ class PaymentServiceTest {
                 method = PaymentMethod.BANK_TRANSFER,
             )
 
-        every { paymentRepository.existsByIdempotencyKey("dup-key") } returns true
+        every { paymentRepository.existsByIdempotencyKeyAndDeletedFalse("dup-key") } returns true
 
         assertThrows(DuplicatePaymentException::class.java) {
             paymentService.createPayment(request)
@@ -95,7 +94,7 @@ class PaymentServiceTest {
                 method = PaymentMethod.ACCOUNT_BALANCE,
             )
 
-        every { paymentRepository.existsByIdempotencyKey("trim-key") } returns false
+        every { paymentRepository.existsByIdempotencyKeyAndDeletedFalse("trim-key") } returns false
         every { paymentRepository.save(any()) } answers {
             val payment = firstArg<Payment>()
             Payment(
@@ -111,7 +110,7 @@ class PaymentServiceTest {
 
         val result = paymentService.createPayment(request)
 
-        verify(exactly = 1) { paymentRepository.existsByIdempotencyKey("trim-key") }
+        verify(exactly = 1) { paymentRepository.existsByIdempotencyKeyAndDeletedFalse("trim-key") }
         val paymentSlot = slot<Payment>()
         verify(exactly = 1) { paymentRepository.save(capture(paymentSlot)) }
         assertEquals("trim-key", paymentSlot.captured.idempotencyKey)
@@ -120,7 +119,7 @@ class PaymentServiceTest {
 
     @Test
     fun `approve payment changes status from pending to approved`() {
-        every { paymentRepository.findById(10L) } returns Optional.of(
+        every { paymentRepository.findByIdAndDeletedFalse(10L) } returns
             Payment(
                 id = 10,
                 orderId = 111,
@@ -129,17 +128,55 @@ class PaymentServiceTest {
                 method = PaymentMethod.CARD,
                 status = PaymentStatus.PENDING,
                 createdAt = LocalDateTime.now(),
-            ),
-        )
+            )
 
-        val result = paymentService.approvePayment(10L)
+        val result = paymentService.approvePayment(10L, "approve-unit-key")
 
         assertEquals(PaymentStatus.APPROVED, result.status)
     }
 
     @Test
+    fun `approve payment returns the existing response when approved with the same key`() {
+        every { paymentRepository.findByIdAndDeletedFalse(11L) } returns
+            Payment(
+                id = 11,
+                orderId = 112,
+                idempotencyKey = "payment-key-11",
+                approvalIdempotencyKey = "retry-key-11",
+                amount = BigDecimal("1100.00"),
+                method = PaymentMethod.CARD,
+                status = PaymentStatus.APPROVED,
+                createdAt = LocalDateTime.now(),
+            )
+
+        val result = paymentService.approvePayment(11L, "  retry-key-11  ")
+
+        assertEquals(11L, result.id)
+        assertEquals(PaymentStatus.APPROVED, result.status)
+    }
+
+    @Test
+    fun `approve payment rejects a different key after approval`() {
+        every { paymentRepository.findByIdAndDeletedFalse(12L) } returns
+            Payment(
+                id = 12,
+                orderId = 113,
+                idempotencyKey = "payment-key-12",
+                approvalIdempotencyKey = "original-key-12",
+                amount = BigDecimal("1200.00"),
+                method = PaymentMethod.CARD,
+                status = PaymentStatus.APPROVED,
+                createdAt = LocalDateTime.now(),
+            )
+
+        assertThrows(InvalidPaymentStatusTransitionException::class.java) {
+            paymentService.approvePayment(12L, "different-key-12")
+        }
+    }
+
+    @Test
     fun `cancel payment changes status from approved to canceled`() {
-        every { paymentRepository.findById(20L) } returns Optional.of(
+        every { paymentRepository.findByIdAndDeletedFalse(20L) } returns
             Payment(
                 id = 20,
                 orderId = 222,
@@ -148,8 +185,7 @@ class PaymentServiceTest {
                 method = PaymentMethod.BANK_TRANSFER,
                 status = PaymentStatus.APPROVED,
                 createdAt = LocalDateTime.now(),
-            ),
-        )
+            )
 
         val result = paymentService.cancelPayment(20L)
 
@@ -158,7 +194,7 @@ class PaymentServiceTest {
 
     @Test
     fun `approve payment throws conflict when status is not pending`() {
-        every { paymentRepository.findById(30L) } returns Optional.of(
+        every { paymentRepository.findByIdAndDeletedFalse(30L) } returns
             Payment(
                 id = 30,
                 orderId = 333,
@@ -167,17 +203,16 @@ class PaymentServiceTest {
                 method = PaymentMethod.CARD,
                 status = PaymentStatus.CANCELED,
                 createdAt = LocalDateTime.now(),
-            ),
-        )
+            )
 
         assertThrows(InvalidPaymentStatusTransitionException::class.java) {
-            paymentService.approvePayment(30L)
+            paymentService.approvePayment(30L, "approve-conflict-key")
         }
     }
 
     @Test
     fun `cancel payment throws not found when payment does not exist`() {
-        every { paymentRepository.findById(999L) } returns Optional.empty()
+        every { paymentRepository.findByIdAndDeletedFalse(999L) } returns null
 
         assertThrows(PaymentNotFoundException::class.java) {
             paymentService.cancelPayment(999L)

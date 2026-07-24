@@ -30,9 +30,21 @@ class PaymentService(
     }
 
     @Transactional
-    fun approvePayment(paymentId: Long): CreatePaymentResponse {
+    fun approvePayment(paymentId: Long, approvalIdempotencyKey: String): CreatePaymentResponse {
         val payment = paymentRepository.findByIdAndDeletedFalse(paymentId)
             ?: throw PaymentNotFoundException("payment not found. id=$paymentId")
+
+        val normalizedKey = approvalIdempotencyKey.trim()
+        require(normalizedKey.isNotEmpty()) { "Idempotency-Key must not be blank" }
+
+        if (payment.status == PaymentStatus.APPROVED) {
+            if (payment.approvalIdempotencyKey == normalizedKey) {
+                return payment.toResponse()
+            }
+            throw InvalidPaymentStatusTransitionException(
+                "payment is already approved with a different idempotency key",
+            )
+        }
 
         if (payment.status != PaymentStatus.PENDING) {
             throw InvalidPaymentStatusTransitionException(
@@ -40,17 +52,10 @@ class PaymentService(
             )
         }
 
+        payment.approvalIdempotencyKey = normalizedKey
         payment.approve()
 
-        return CreatePaymentResponse(
-            id = payment.id,
-            orderId = payment.orderId,
-            idempotencyKey = payment.idempotencyKey,
-            amount = payment.amount,
-            method = payment.method,
-            status = payment.status,
-            createdAt = payment.createdAt,
-        )
+        return payment.toResponse()
     }
 
     @Transactional
@@ -166,4 +171,14 @@ class PaymentService(
             createdAt = saved.createdAt,
         )
     }
+
+    private fun Payment.toResponse() = CreatePaymentResponse(
+        id = id,
+        orderId = orderId,
+        idempotencyKey = idempotencyKey,
+        amount = amount,
+        method = method,
+        status = status,
+        createdAt = createdAt,
+    )
 }

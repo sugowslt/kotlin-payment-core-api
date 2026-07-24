@@ -31,6 +31,9 @@ class Payment(
     @Column(name = "idempotency_key", nullable = false, unique = true, length = 120)
     val idempotencyKey: String,
 
+    @Column(name = "approval_idempotency_key", unique = true, length = 120)
+    var approvalIdempotencyKey: String? = null,
+
     @Column(nullable = false, precision = 18, scale = 2)
     val amount: BigDecimal,
 
