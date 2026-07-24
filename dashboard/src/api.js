@@ -116,3 +116,10 @@ export async function publishOutbox() {
     headers: operationsHeaders(),
   }, '아웃박스 로컬 처리')
 }
+
+export async function retryOutboxEvent(eventId) {
+  return requestJson(`/api/v1/internal/outbox/${encodeURIComponent(eventId)}/retry`, {
+    method: 'POST',
+    headers: operationsHeaders(),
+  }, '아웃박스 이벤트 재처리')
+}

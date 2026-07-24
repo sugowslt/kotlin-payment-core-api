@@ -3,6 +3,7 @@ package com.sugowslt.paymentcoreapi
 import com.sugowslt.paymentcoreapi.repository.PaymentRepository
 import com.sugowslt.paymentcoreapi.repository.PaymentOutboxEventRepository
 import com.sugowslt.paymentcoreapi.repository.PaymentWebhookEventRepository
+import com.sugowslt.paymentcoreapi.entity.OutboxStatus
 import org.hamcrest.Matchers
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -786,6 +787,76 @@ class PaymentControllerIntegrationTest(
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.pendingEvents").value(0))
             .andExpect(jsonPath("$.publishedEvents").value(1))
+    }
+
+    @Test
+    fun `failed outbox event can be manually requeued with replay token`() {
+        mockMvc.perform(
+            post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "orderId": 8112,
+                      "idempotencyKey": "outbox-retry-8112",
+                      "amount": 19000.00,
+                      "method": "CARD"
+                    }
+                    """.trimIndent(),
+                ),
+        ).andExpect(status().isCreated)
+
+        val event = paymentOutboxEventRepository.findAll().single()
+        event.status = OutboxStatus.FAILED
+        event.retryCount = 3
+        event.lastError = "broker unavailable"
+        event.nextAttemptAt = null
+        paymentOutboxEventRepository.save(event)
+
+        mockMvc.perform(
+            post("/api/v1/internal/outbox/${event.id}/retry")
+                .header("X-Webhook-Replay-Token", "test-replay-token"),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.eventId").value(event.id))
+            .andExpect(jsonPath("$.status").value("PENDING"))
+            .andExpect(jsonPath("$.retryCount").value(0))
+
+        assertEquals(OutboxStatus.PENDING, paymentOutboxEventRepository.findById(event.id).orElseThrow().status)
+    }
+
+    @Test
+    fun `outbox retry rejects non failed event`() {
+        mockMvc.perform(
+            post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "orderId": 8113,
+                      "idempotencyKey": "outbox-retry-8113",
+                      "amount": 20000.00,
+                      "method": "CARD"
+                    }
+                    """.trimIndent(),
+                ),
+        ).andExpect(status().isCreated)
+
+        val event = paymentOutboxEventRepository.findAll().single()
+
+        mockMvc.perform(
+            post("/api/v1/internal/outbox/${event.id}/retry")
+                .header("X-Webhook-Replay-Token", "test-replay-token"),
+        )
+            .andExpect(status().isConflict)
+            .andExpect(jsonPath("$.code").value("INVALID_OUTBOX_STATUS"))
+    }
+
+    @Test
+    fun `outbox retry requires replay token`() {
+        mockMvc.perform(post("/api/v1/internal/outbox/999999/retry"))
+            .andExpect(status().isForbidden)
+            .andExpect(jsonPath("$.code").value("WEBHOOK_REPLAY_FORBIDDEN"))
     }
 
     @Test

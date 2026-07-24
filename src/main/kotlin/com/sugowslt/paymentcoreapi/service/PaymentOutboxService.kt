@@ -2,9 +2,12 @@ package com.sugowslt.paymentcoreapi.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sugowslt.paymentcoreapi.controller.dto.PaymentOutboxMetricsResponse
+import com.sugowslt.paymentcoreapi.controller.dto.PaymentOutboxRetryResponse
 import com.sugowslt.paymentcoreapi.entity.OutboxStatus
 import com.sugowslt.paymentcoreapi.entity.Payment
 import com.sugowslt.paymentcoreapi.entity.PaymentOutboxEvent
+import com.sugowslt.paymentcoreapi.exception.InvalidOutboxStatusException
+import com.sugowslt.paymentcoreapi.exception.OutboxEventNotFoundException
 import com.sugowslt.paymentcoreapi.repository.PaymentOutboxEventRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -73,5 +76,28 @@ class PaymentOutboxService(
             }
 
         return metrics()
+    }
+
+    @Transactional
+    fun retryFailed(eventId: Long): PaymentOutboxRetryResponse {
+        val event = paymentOutboxEventRepository.findById(eventId).orElseThrow {
+            OutboxEventNotFoundException(eventId)
+        }
+
+        if (event.status != OutboxStatus.FAILED) {
+            throw InvalidOutboxStatusException(eventId, event.status)
+        }
+
+        event.status = OutboxStatus.PENDING
+        event.retryCount = 0
+        event.lastError = null
+        event.nextAttemptAt = LocalDateTime.now()
+
+        return PaymentOutboxRetryResponse(
+            eventId = event.id,
+            status = event.status,
+            retryCount = event.retryCount,
+            nextAttemptAt = event.nextAttemptAt,
+        )
     }
 }

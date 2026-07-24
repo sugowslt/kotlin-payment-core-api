@@ -7,6 +7,7 @@ import {
   getPaymentsCursor,
   getWebhookMetrics,
   publishOutbox,
+  retryOutboxEvent,
   sendPaymentStatusWebhook,
   transitionPayment,
 } from './api'
@@ -16,6 +17,7 @@ const operations = ref({ webhook: null, outbox: null })
 const operationsLoading = ref(false)
 const operationsError = ref('')
 const operationsMessage = ref('')
+const failedOutboxEventId = ref('')
 
 const projects = [
   {
@@ -445,6 +447,27 @@ async function publishOutboxFromDashboard() {
   }
 }
 
+async function retryOutboxEventFromDashboard() {
+  const eventId = failedOutboxEventId.value.trim()
+  if (!eventId) {
+    operationsError.value = '재처리할 FAILED 아웃박스 eventId를 입력해주세요.'
+    return
+  }
+
+  operationsLoading.value = true
+  operationsError.value = ''
+  operationsMessage.value = ''
+  try {
+    const result = await retryOutboxEvent(eventId)
+    operationsMessage.value = `수동 재처리 대기열 등록: eventId=${result.body.eventId}, status=${result.body.status}`
+    await loadOperations()
+  } catch (error) {
+    operationsError.value = `${error.message} / traceId=${error.traceId ?? '-'}`
+  } finally {
+    operationsLoading.value = false
+  }
+}
+
 watch(activeView, async (view) => {
   if (view === 'payment-demo' && !loadingList.value && payments.value.length === 0 && !listError.value) {
     await loadFirstPage()
@@ -686,6 +709,8 @@ onMounted(async () => {
         <div class="row wrap-row">
           <button @click="loadOperations" :disabled="operationsLoading">지표 새로고침</button>
           <button @click="publishOutboxFromDashboard" :disabled="operationsLoading">대기 아웃박스 로컬 처리</button>
+          <input v-model="failedOutboxEventId" placeholder="FAILED eventId" aria-label="FAILED outbox eventId" />
+          <button @click="retryOutboxEventFromDashboard" :disabled="operationsLoading">실패 이벤트 재처리</button>
         </div>
       </div>
       <p v-if="operationsError" class="meta error-text">{{ operationsError }}</p>
@@ -720,7 +745,7 @@ onMounted(async () => {
           <div class="metric">처리 완료: {{ operations.outbox?.publishedEvents ?? '-' }}</div>
           <div class="metric">실패: {{ operations.outbox?.failedEvents ?? '-' }}</div>
         </div>
-        <p class="meta">결제 변경 이벤트를 결제 트랜잭션과 함께 저장한 뒤, 버튼으로 로컬 처리 상태를 전환합니다.</p>
+        <p class="meta">결제 변경 이벤트를 결제 트랜잭션과 함께 저장하고, 실패 이벤트는 eventId를 지정해 수동 재처리 대기열로 되돌릴 수 있습니다.</p>
       </section>
     </div>
   </template>

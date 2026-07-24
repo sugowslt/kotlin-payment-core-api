@@ -145,6 +145,40 @@ class GlobalExceptionHandler {
             )
     }
 
+    @ExceptionHandler(OutboxEventNotFoundException::class)
+    fun handleOutboxEventNotFound(
+        ex: OutboxEventNotFoundException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .body(
+                ApiErrorResponse(
+                    timestamp = LocalDateTime.now(),
+                    code = "OUTBOX_EVENT_NOT_FOUND",
+                    message = ex.message ?: "outbox event not found",
+                    path = request.requestURI,
+                    traceId = traceIdOf(request),
+                ),
+            )
+    }
+
+    @ExceptionHandler(InvalidOutboxStatusException::class)
+    fun handleInvalidOutboxStatus(
+        ex: InvalidOutboxStatusException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(
+                ApiErrorResponse(
+                    timestamp = LocalDateTime.now(),
+                    code = "INVALID_OUTBOX_STATUS",
+                    message = ex.message ?: "invalid outbox status",
+                    path = request.requestURI,
+                    traceId = traceIdOf(request),
+                ),
+            )
+    }
+
     @ExceptionHandler(HttpMessageNotReadableException::class)
     fun handleNotReadable(
         request: HttpServletRequest,
