@@ -1,0 +1,14 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+
+payment:
+  gateway:
+    provider: ${PAYMENT_GATEWAY_PROVIDER:toss}
+  webhook:
+    # 운영에서는 반드시 환경변수로 주입하고, 로컬 기본 token을 사용하지 않습니다.
+    replay-token: ${PAYMENT_WEBHOOK_REPLAY_TOKEN:}
+  outbox:
+    worker:
+      enabled: ${PAYMENT_OUTBOX_WORKER_ENABLED:true}

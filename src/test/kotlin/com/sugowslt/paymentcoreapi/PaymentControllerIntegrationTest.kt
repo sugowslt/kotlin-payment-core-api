@@ -2,6 +2,7 @@ package com.sugowslt.paymentcoreapi
 
 import com.sugowslt.paymentcoreapi.repository.PaymentRepository
 import com.sugowslt.paymentcoreapi.repository.PaymentCancellationRepository
+import com.sugowslt.paymentcoreapi.repository.InternalOperationAuditEventRepository
 import com.sugowslt.paymentcoreapi.repository.PaymentOutboxEventRepository
 import com.sugowslt.paymentcoreapi.repository.PaymentWebhookEventRepository
 import com.sugowslt.paymentcoreapi.entity.OutboxStatus
@@ -30,6 +31,7 @@ class PaymentControllerIntegrationTest(
     @Autowired private val mockMvc: MockMvc,
     @Autowired private val paymentRepository: PaymentRepository,
     @Autowired private val paymentCancellationRepository: PaymentCancellationRepository,
+    @Autowired private val internalOperationAuditEventRepository: InternalOperationAuditEventRepository,
     @Autowired private val paymentOutboxEventRepository: PaymentOutboxEventRepository,
     @Autowired private val paymentWebhookEventRepository: PaymentWebhookEventRepository,
 ) {
@@ -42,6 +44,7 @@ class PaymentControllerIntegrationTest(
     fun clearPayments() {
         paymentRepository.deleteAll()
         paymentCancellationRepository.deleteAll()
+        internalOperationAuditEventRepository.deleteAll()
         paymentOutboxEventRepository.deleteAll()
         paymentWebhookEventRepository.deleteAll()
     }
@@ -851,6 +854,13 @@ class PaymentControllerIntegrationTest(
     }
 
     @Test
+    fun `internal audit events require replay token`() {
+        mockMvc.perform(get("/api/v1/internal/audit-events"))
+            .andExpect(status().isForbidden)
+            .andExpect(jsonPath("$.code").value("WEBHOOK_REPLAY_FORBIDDEN"))
+    }
+
+    @Test
     fun `outbox metrics shows pending event and local publish marks it published`() {
         mockMvc.perform(
             post("/api/v1/payments")
@@ -892,6 +902,53 @@ class PaymentControllerIntegrationTest(
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.pendingEvents").value(0))
             .andExpect(jsonPath("$.publishedEvents").value(1))
+
+        mockMvc.perform(
+            get("/api/v1/internal/audit-events")
+                .header("X-Webhook-Replay-Token", "test-replay-token"),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$[0].operation").value("OUTBOX_PUBLISH"))
+            .andExpect(jsonPath("$[0].outcome").value("SUCCESS"))
+    }
+
+    @Test
+    fun `internal operation audit stores trace id for webhook replay`() {
+        val transmissionId = "audit-replay-transmission-8115"
+        val webhookBody =
+            """
+            {
+              "eventType": "PAYMENT_STATUS_CHANGED",
+              "createdAt": "2026-07-24T18:05:00.000000",
+              "data": {
+                "paymentKey": "toss-payment-key-8115",
+                "orderId": "8115",
+                "status": "DONE"
+              }
+            }
+            """.trimIndent()
+
+        mockMvc.perform(
+            post("/api/v1/webhooks/toss/payments")
+                .header("tosspayments-webhook-transmission-id", transmissionId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(webhookBody),
+        ).andExpect(status().isOk)
+
+        mockMvc.perform(
+            post("/api/v1/internal/webhooks/$transmissionId/replay")
+                .header("X-Webhook-Replay-Token", "test-replay-token")
+                .header(TRACE_ID_HEADER, "audit-trace-8115"),
+        ).andExpect(status().isOk)
+
+        mockMvc.perform(
+            get("/api/v1/internal/audit-events")
+                .header("X-Webhook-Replay-Token", "test-replay-token"),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$[0].operation").value("WEBHOOK_REPLAY"))
+            .andExpect(jsonPath("$[0].targetId").value(transmissionId))
+            .andExpect(jsonPath("$[0].traceId").value("audit-trace-8115"))
     }
 
     @Test
