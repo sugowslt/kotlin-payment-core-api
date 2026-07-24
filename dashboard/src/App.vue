@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import {
   approvePayment,
+  cancelPayment,
   createPayment,
   getOutboxMetrics,
   getPaymentsCursor,
@@ -126,6 +127,7 @@ const listError = ref('')
 
 const paymentId = ref('')
 const approvalKey = ref('dashboard-approve-key')
+const cancellationKey = ref('dashboard-cancel-key')
 const actionMessage = ref('')
 const actionLoading = ref(false)
 
@@ -345,7 +347,7 @@ async function runAction(action) {
   try {
     const updated = action === 'approve'
       ? await approvePayment(id, approvalKey.value.trim() || `dashboard-approve-${Date.now()}`)
-      : await transitionPayment(id, action)
+      : await cancelPayment(id, cancellationKey.value.trim() || `dashboard-cancel-${Date.now()}`)
     totalRequests.value += 1
     successRequests.value += 1
     lastTraceId.value = updated.traceId || '-'
@@ -829,6 +831,9 @@ onMounted(async () => {
         </div>
         <div class="row" style="margin-top: 10px">
           <input v-model="approvalKey" placeholder="Idempotency-Key (승인용)" />
+        </div>
+        <div class="row" style="margin-top: 10px">
+          <input v-model="cancellationKey" placeholder="Idempotency-Key (취소용)" />
         </div>
         <p class="meta" style="margin-top: 10px">
           현재 선택: {{ selectedPayment ? `paymentId=${selectedPayment.id} / status=${selectedPayment.status}` : '아직 선택된 결제가 없습니다.' }}

@@ -32,6 +32,7 @@ class PaymentOutboxService(
                         "paymentId" to payment.id,
                         "orderId" to payment.orderId,
                         "status" to payment.status.name,
+                        "canceledAmount" to payment.canceledAmount,
                         "providerTransactionId" to payment.providerTransactionId,
                     ),
                 ),

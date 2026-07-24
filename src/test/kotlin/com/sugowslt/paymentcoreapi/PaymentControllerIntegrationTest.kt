@@ -1,6 +1,7 @@
 package com.sugowslt.paymentcoreapi
 
 import com.sugowslt.paymentcoreapi.repository.PaymentRepository
+import com.sugowslt.paymentcoreapi.repository.PaymentCancellationRepository
 import com.sugowslt.paymentcoreapi.repository.PaymentOutboxEventRepository
 import com.sugowslt.paymentcoreapi.repository.PaymentWebhookEventRepository
 import com.sugowslt.paymentcoreapi.entity.OutboxStatus
@@ -28,6 +29,7 @@ import java.util.concurrent.TimeUnit
 class PaymentControllerIntegrationTest(
     @Autowired private val mockMvc: MockMvc,
     @Autowired private val paymentRepository: PaymentRepository,
+    @Autowired private val paymentCancellationRepository: PaymentCancellationRepository,
     @Autowired private val paymentOutboxEventRepository: PaymentOutboxEventRepository,
     @Autowired private val paymentWebhookEventRepository: PaymentWebhookEventRepository,
 ) {
@@ -39,6 +41,7 @@ class PaymentControllerIntegrationTest(
     @BeforeEach
     fun clearPayments() {
         paymentRepository.deleteAll()
+        paymentCancellationRepository.deleteAll()
         paymentOutboxEventRepository.deleteAll()
         paymentWebhookEventRepository.deleteAll()
     }
@@ -439,6 +442,85 @@ class PaymentControllerIntegrationTest(
         )
             .andExpect(status().isConflict)
             .andExpect(jsonPath("$.code").value("INVALID_PAYMENT_STATUS_TRANSITION"))
+    }
+
+    @Test
+    fun `partial cancellations accumulate and full cancellation changes status`() {
+        val createResponse = mockMvc.perform(
+            post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "orderId": 8010,
+                      "idempotencyKey": "partial-cancel-8010",
+                      "amount": 10000.00,
+                      "method": "CARD"
+                    }
+                    """.trimIndent(),
+                ),
+        ).andExpect(status().isCreated).andReturn()
+
+        val createdId = "\"id\":(\\d+)".toRegex()
+            .find(createResponse.response.contentAsString)?.groupValues?.get(1)
+            ?: throw IllegalStateException("cannot parse created payment id")
+
+        mockMvc.perform(post("/api/v1/payments/$createdId/approve").header("Idempotency-Key", "partial-approve-8010"))
+            .andExpect(status().isOk)
+
+        mockMvc.perform(
+            post("/api/v1/payments/$createdId/cancel")
+                .header("Idempotency-Key", "partial-cancel-key-1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""{"cancelReason":"partial customer request","cancelAmount":3000.00}"""),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.status").value("APPROVED"))
+            .andExpect(jsonPath("$.canceledAmount").value(3000.00))
+
+        mockMvc.perform(
+            post("/api/v1/payments/$createdId/cancel")
+                .header("Idempotency-Key", "partial-cancel-key-2")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""{"cancelReason":"remaining customer request","cancelAmount":7000.00}"""),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.status").value("CANCELED"))
+            .andExpect(jsonPath("$.canceledAmount").value(10000.00))
+    }
+
+    @Test
+    fun `cancellation amount greater than remaining amount returns 400`() {
+        val createResponse = mockMvc.perform(
+            post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "orderId": 8011,
+                      "idempotencyKey": "partial-cancel-invalid-8011",
+                      "amount": 10000.00,
+                      "method": "CARD"
+                    }
+                    """.trimIndent(),
+                ),
+        ).andExpect(status().isCreated).andReturn()
+
+        val createdId = "\"id\":(\\d+)".toRegex()
+            .find(createResponse.response.contentAsString)?.groupValues?.get(1)
+            ?: throw IllegalStateException("cannot parse created payment id")
+
+        mockMvc.perform(post("/api/v1/payments/$createdId/approve").header("Idempotency-Key", "partial-approve-8011"))
+            .andExpect(status().isOk)
+
+        mockMvc.perform(
+            post("/api/v1/payments/$createdId/cancel")
+                .header("Idempotency-Key", "partial-cancel-invalid-key")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""{"cancelReason":"invalid amount","cancelAmount":10000.01}"""),
+        )
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.code").value("INVALID_PAYMENT_CANCELLATION"))
     }
 
     @Test

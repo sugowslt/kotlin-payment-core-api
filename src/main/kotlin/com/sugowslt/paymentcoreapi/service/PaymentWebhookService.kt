@@ -5,9 +5,11 @@ import com.sugowslt.paymentcoreapi.controller.dto.PaymentWebhookMetricsResponse
 import com.sugowslt.paymentcoreapi.controller.dto.PaymentWebhookResponse
 import com.sugowslt.paymentcoreapi.controller.dto.TossPaymentStatusWebhookRequest
 import com.sugowslt.paymentcoreapi.entity.PaymentStatus
+import com.sugowslt.paymentcoreapi.entity.PaymentCancellation
 import com.sugowslt.paymentcoreapi.entity.PaymentWebhookEvent
 import com.sugowslt.paymentcoreapi.exception.InvalidWebhookException
 import com.sugowslt.paymentcoreapi.repository.PaymentRepository
+import com.sugowslt.paymentcoreapi.repository.PaymentCancellationRepository
 import com.sugowslt.paymentcoreapi.repository.PaymentWebhookEventRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -19,6 +21,7 @@ class PaymentWebhookService(
     private val webhookEventRepository: PaymentWebhookEventRepository,
     private val objectMapper: ObjectMapper,
     private val paymentOutboxService: PaymentOutboxService,
+    private val paymentCancellationRepository: PaymentCancellationRepository,
 ) {
 
     @Transactional
@@ -121,7 +124,17 @@ class PaymentWebhookService(
             }
             "CANCELED" -> {
                 if (payment.status == PaymentStatus.APPROVED) {
-                    payment.cancel("webhook-${event.transmissionId}")
+                    val cancellationKey = "webhook-${event.transmissionId}"
+                    val remainingAmount = payment.amount.subtract(payment.canceledAmount)
+                    payment.applyCancellation(remainingAmount, cancellationKey)
+                    paymentCancellationRepository.save(
+                        PaymentCancellation(
+                            paymentId = payment.id,
+                            cancellationIdempotencyKey = cancellationKey,
+                            cancelAmount = remainingAmount,
+                            cancelReason = "Toss status webhook",
+                        ),
+                    )
                     paymentOutboxService.enqueuePaymentEvent(payment, "PAYMENT_CANCELED_BY_WEBHOOK")
                     "PROCESSED_CANCELED"
                 } else {

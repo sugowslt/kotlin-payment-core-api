@@ -26,6 +26,7 @@ data class PaymentGatewayCancellationRequest(
     val paymentId: Long,
     val providerTransactionId: String?,
     val cancelReason: String = "customer requested cancellation",
+    val cancelAmount: BigDecimal? = null,
     val cancellationIdempotencyKey: String = "payment-cancel-$paymentId",
 )
 

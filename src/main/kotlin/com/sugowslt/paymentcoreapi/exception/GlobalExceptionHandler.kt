@@ -179,6 +179,23 @@ class GlobalExceptionHandler {
             )
     }
 
+    @ExceptionHandler(InvalidPaymentCancellationException::class)
+    fun handleInvalidPaymentCancellation(
+        ex: InvalidPaymentCancellationException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+            .body(
+                ApiErrorResponse(
+                    timestamp = LocalDateTime.now(),
+                    code = "INVALID_PAYMENT_CANCELLATION",
+                    message = ex.message ?: "invalid payment cancellation",
+                    path = request.requestURI,
+                    traceId = traceIdOf(request),
+                ),
+            )
+    }
+
     @ExceptionHandler(HttpMessageNotReadableException::class)
     fun handleNotReadable(
         request: HttpServletRequest,

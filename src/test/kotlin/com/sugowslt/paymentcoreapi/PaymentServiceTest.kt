@@ -13,6 +13,7 @@ import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayCancellationResult
 import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayRejectedException
 import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayUnavailableException
 import com.sugowslt.paymentcoreapi.repository.PaymentRepository
+import com.sugowslt.paymentcoreapi.repository.PaymentCancellationRepository
 import com.sugowslt.paymentcoreapi.service.PaymentService
 import com.sugowslt.paymentcoreapi.service.PaymentOutboxService
 import io.mockk.MockKAnnotations
@@ -38,12 +39,22 @@ class PaymentServiceTest {
     @MockK(relaxed = true)
     lateinit var paymentOutboxService: PaymentOutboxService
 
+    @MockK(relaxed = true)
+    lateinit var paymentCancellationRepository: PaymentCancellationRepository
+
     lateinit var paymentService: PaymentService
 
     @BeforeEach
     fun setUp() {
         MockKAnnotations.init(this)
-        paymentService = PaymentService(paymentRepository, paymentGateway, paymentOutboxService)
+        every { paymentCancellationRepository.findByCancellationIdempotencyKey(any()) } returns null
+        every { paymentCancellationRepository.save(any()) } answers { firstArg() }
+        paymentService = PaymentService(
+            paymentRepository,
+            paymentGateway,
+            paymentOutboxService,
+            paymentCancellationRepository,
+        )
     }
 
     @Test

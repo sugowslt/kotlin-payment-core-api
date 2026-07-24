@@ -2,6 +2,7 @@ package com.sugowslt.paymentcoreapi.controller
 
 import com.sugowslt.paymentcoreapi.controller.dto.CreatePaymentRequest
 import com.sugowslt.paymentcoreapi.controller.dto.CreatePaymentResponse
+import com.sugowslt.paymentcoreapi.controller.dto.CancelPaymentRequest
 import com.sugowslt.paymentcoreapi.controller.dto.GetPaymentsCursorResponse
 import com.sugowslt.paymentcoreapi.controller.dto.GetPaymentsResponse
 import com.sugowslt.paymentcoreapi.controller.dto.PaymentSummary
@@ -41,8 +42,13 @@ class PaymentController(
     fun cancelPayment(
         @PathVariable paymentId: Long,
         @RequestHeader("Idempotency-Key") cancellationIdempotencyKey: String,
+        @Valid @RequestBody(required = false) request: CancelPaymentRequest?,
     ): ResponseEntity<CreatePaymentResponse> {
-        val canceled = paymentService.cancelPayment(paymentId, cancellationIdempotencyKey)
+        val canceled = paymentService.cancelPayment(
+            paymentId,
+            cancellationIdempotencyKey,
+            request ?: CancelPaymentRequest(),
+        )
         return ResponseEntity.ok(canceled)
     }
 

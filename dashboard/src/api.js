@@ -78,6 +78,17 @@ export async function transitionPayment(paymentId, action) {
   }, action)
 }
 
+export async function cancelPayment(paymentId, cancellationIdempotencyKey, payload = {}) {
+  return requestJson(`/api/v1/payments/${paymentId}/cancel`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': cancellationIdempotencyKey,
+    },
+    body: JSON.stringify(payload),
+  }, '결제 취소')
+}
+
 export async function approvePayment(paymentId, idempotencyKey) {
   return requestJson(`/api/v1/payments/${paymentId}/approve`, {
     method: 'POST',

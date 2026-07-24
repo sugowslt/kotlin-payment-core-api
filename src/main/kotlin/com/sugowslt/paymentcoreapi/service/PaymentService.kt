@@ -2,19 +2,23 @@ package com.sugowslt.paymentcoreapi.service
 
 import com.sugowslt.paymentcoreapi.controller.dto.CreatePaymentRequest
 import com.sugowslt.paymentcoreapi.controller.dto.CreatePaymentResponse
+import com.sugowslt.paymentcoreapi.controller.dto.CancelPaymentRequest
 import com.sugowslt.paymentcoreapi.controller.dto.GetPaymentsCursorResponse
 import com.sugowslt.paymentcoreapi.controller.dto.GetPaymentsResponse
 import com.sugowslt.paymentcoreapi.controller.dto.PaymentSummary
 import com.sugowslt.paymentcoreapi.entity.Payment
+import com.sugowslt.paymentcoreapi.entity.PaymentCancellation
 import com.sugowslt.paymentcoreapi.entity.PaymentStatus
 import com.sugowslt.paymentcoreapi.exception.DuplicatePaymentException
 import com.sugowslt.paymentcoreapi.exception.InvalidPaymentStatusTransitionException
+import com.sugowslt.paymentcoreapi.exception.InvalidPaymentCancellationException
 import com.sugowslt.paymentcoreapi.exception.PaymentNotFoundException
 import com.sugowslt.paymentcoreapi.gateway.PaymentGateway
 import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayApprovalRequest
 import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayCancellationRequest
 import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayRejectedException
 import com.sugowslt.paymentcoreapi.repository.PaymentRepository
+import com.sugowslt.paymentcoreapi.repository.PaymentCancellationRepository
 import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Pageable
 import org.springframework.stereotype.Service
@@ -25,6 +29,7 @@ class PaymentService(
     private val paymentRepository: PaymentRepository,
     private val paymentGateway: PaymentGateway,
     private val paymentOutboxService: PaymentOutboxService,
+    private val paymentCancellationRepository: PaymentCancellationRepository,
 ) {
 
     @Transactional
@@ -90,12 +95,23 @@ class PaymentService(
     fun cancelPayment(
         paymentId: Long,
         cancellationIdempotencyKey: String = "payment-cancel-$paymentId",
+        request: CancelPaymentRequest = CancelPaymentRequest(),
     ): CreatePaymentResponse {
         val payment = paymentRepository.findByIdAndDeletedFalse(paymentId)
             ?: throw PaymentNotFoundException("payment not found. id=$paymentId")
 
         val normalizedKey = cancellationIdempotencyKey.trim()
-        require(normalizedKey.isNotEmpty()) { "Idempotency-Key must not be blank" }
+        if (normalizedKey.isEmpty()) {
+            throw InvalidPaymentCancellationException("Idempotency-Key must not be blank")
+        }
+
+        val existingCancellation = paymentCancellationRepository.findByCancellationIdempotencyKey(normalizedKey)
+        if (existingCancellation != null) {
+            if (existingCancellation.paymentId == payment.id) {
+                return payment.toResponse()
+            }
+            throw InvalidPaymentCancellationException("cancellation idempotency key is already used")
+        }
 
         if (payment.status == PaymentStatus.CANCELED) {
             if (payment.cancellationIdempotencyKey == normalizedKey) {
@@ -112,25 +128,41 @@ class PaymentService(
             )
         }
 
-        paymentGateway.cancel(
+        val cancelReason = request.cancelReason.trim()
+        if (cancelReason.isEmpty()) {
+            throw InvalidPaymentCancellationException("cancel reason must not be blank")
+        }
+
+        val remainingAmount = payment.amount.subtract(payment.canceledAmount)
+        val cancelAmount = request.cancelAmount ?: remainingAmount
+        if (cancelAmount <= java.math.BigDecimal.ZERO || cancelAmount > remainingAmount) {
+            throw InvalidPaymentCancellationException(
+                "cancel amount must be greater than zero and no greater than remaining amount=$remainingAmount",
+            )
+        }
+
+        val gatewayResult = paymentGateway.cancel(
             PaymentGatewayCancellationRequest(
                 paymentId = payment.id,
                 providerTransactionId = payment.providerTransactionId,
+                cancelReason = cancelReason,
+                cancelAmount = cancelAmount,
                 cancellationIdempotencyKey = normalizedKey,
             ),
         )
-        payment.cancel(normalizedKey)
+        payment.applyCancellation(cancelAmount, normalizedKey)
+        paymentCancellationRepository.save(
+            PaymentCancellation(
+                paymentId = payment.id,
+                cancellationIdempotencyKey = normalizedKey,
+                cancelAmount = cancelAmount,
+                cancelReason = cancelReason,
+                providerCancellationId = gatewayResult.providerCancellationId,
+            ),
+        )
         paymentOutboxService.enqueuePaymentEvent(payment, "PAYMENT_CANCELED")
 
-        return CreatePaymentResponse(
-            id = payment.id,
-            orderId = payment.orderId,
-            idempotencyKey = payment.idempotencyKey,
-            amount = payment.amount,
-            method = payment.method,
-            status = payment.status,
-            createdAt = payment.createdAt,
-        )
+        return payment.toResponse()
     }
 
     @Transactional(readOnly = true)
@@ -138,15 +170,7 @@ class PaymentService(
         val found = paymentRepository.findByIdAndDeletedFalse(paymentId)
             ?: throw PaymentNotFoundException("payment not found. id=$paymentId")
 
-        return CreatePaymentResponse(
-            id = found.id,
-            orderId = found.orderId,
-            idempotencyKey = found.idempotencyKey,
-            amount = found.amount,
-            method = found.method,
-            status = found.status,
-            createdAt = found.createdAt,
-        )
+        return found.toResponse()
     }
 
     @Transactional(readOnly = true)
@@ -214,15 +238,7 @@ class PaymentService(
 
         paymentOutboxService.enqueuePaymentEvent(saved, "PAYMENT_CREATED")
 
-        return CreatePaymentResponse(
-            id = saved.id,
-            orderId = saved.orderId,
-            idempotencyKey = saved.idempotencyKey,
-            amount = saved.amount,
-            method = saved.method,
-            status = saved.status,
-            createdAt = saved.createdAt,
-        )
+        return saved.toResponse()
     }
 
     private fun Payment.toResponse() = CreatePaymentResponse(
@@ -232,6 +248,7 @@ class PaymentService(
         amount = amount,
         method = method,
         status = status,
+        canceledAmount = canceledAmount,
         createdAt = createdAt,
     )
 }

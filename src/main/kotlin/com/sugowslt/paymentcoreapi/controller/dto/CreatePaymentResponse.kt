@@ -12,5 +12,6 @@ data class CreatePaymentResponse(
     val amount: BigDecimal,
     val method: PaymentMethod,
     val status: PaymentStatus,
+    val canceledAmount: BigDecimal = BigDecimal.ZERO,
     val createdAt: LocalDateTime,
 )

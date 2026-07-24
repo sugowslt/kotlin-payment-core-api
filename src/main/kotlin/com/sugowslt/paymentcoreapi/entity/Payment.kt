@@ -40,6 +40,9 @@ class Payment(
     @Column(name = "provider_transaction_id", unique = true, length = 120)
     var providerTransactionId: String? = null,
 
+    @Column(name = "canceled_amount", nullable = false, precision = 18, scale = 2)
+    var canceledAmount: BigDecimal = BigDecimal.ZERO,
+
     @Column(nullable = false, precision = 18, scale = 2)
     val amount: BigDecimal,
 
@@ -71,8 +74,11 @@ class Payment(
         updatedAt = LocalDateTime.now()
     }
 
-    fun cancel(cancellationIdempotencyKey: String) {
-        status = PaymentStatus.CANCELED
+    fun applyCancellation(cancelAmount: BigDecimal, cancellationIdempotencyKey: String) {
+        canceledAmount = canceledAmount.add(cancelAmount)
+        if (canceledAmount.compareTo(amount) == 0) {
+            status = PaymentStatus.CANCELED
+        }
         this.cancellationIdempotencyKey = cancellationIdempotencyKey
         updatedAt = LocalDateTime.now()
     }

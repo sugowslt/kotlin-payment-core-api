@@ -163,7 +163,8 @@ class TossPaymentGatewayTest {
             .andExpect(content().contentType(MediaType.APPLICATION_JSON))
             .andExpect(content().json("""
                 {
-                  "cancelReason": "customer request"
+                  "cancelReason": "customer request",
+                  "cancelAmount": 3000.00
                 }
             """.trimIndent()))
             .andRespond(
@@ -184,6 +185,7 @@ class TossPaymentGatewayTest {
                 paymentId = 4,
                 providerTransactionId = "toss-payment-key-4",
                 cancelReason = "customer request",
+                cancelAmount = BigDecimal("3000.00"),
                 cancellationIdempotencyKey = "cancel-key-4",
             ),
         )

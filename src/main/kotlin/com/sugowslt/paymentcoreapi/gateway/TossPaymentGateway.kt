@@ -1,6 +1,7 @@
 package com.sugowslt.paymentcoreapi.gateway
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.annotation.JsonInclude
 import org.springframework.http.MediaType
 import org.springframework.web.client.ResourceAccessException
 import org.springframework.web.client.RestClient
@@ -81,7 +82,12 @@ class TossPaymentGateway(
                     .uri("/v1/payments/{paymentKey}/cancel", paymentKey)
                     .contentType(MediaType.APPLICATION_JSON)
                     .header("Idempotency-Key", request.cancellationIdempotencyKey)
-                    .body(TossCancelRequest(cancelReason = cancelReason))
+                    .body(
+                        TossCancelRequest(
+                            cancelReason = cancelReason,
+                            cancelAmount = request.cancelAmount,
+                        ),
+                    )
                     .retrieve()
                     .body(TossCancelResponse::class.java)
                     ?: throw PaymentGatewayUnavailableException("Toss gateway returned an empty cancellation response")
@@ -125,8 +131,10 @@ class TossPaymentGateway(
         @JsonProperty("approvedAt") val approvedAt: String? = null,
     )
 
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     private data class TossCancelRequest(
         val cancelReason: String,
+        val cancelAmount: java.math.BigDecimal? = null,
     )
 
     private data class TossCancelResponse(
