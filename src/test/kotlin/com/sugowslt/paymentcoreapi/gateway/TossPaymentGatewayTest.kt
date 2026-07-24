@@ -141,6 +141,81 @@ class TossPaymentGatewayTest {
         server.verify()
     }
 
+    @Test
+    fun `cancel sends Toss cancellation request with reason and idempotency key`() {
+        val builder = RestClient.builder().baseUrl("http://localhost")
+        val server = MockRestServiceServer.bindTo(builder).build()
+        val gateway = TossPaymentGateway(
+            properties = TossPaymentGatewayProperties(
+                baseUrl = "http://localhost",
+                secretKey = "test_sk_example",
+                maxRetries = 0,
+            ),
+            restClient = builder
+                .defaultHeaders { headers -> headers.setBasicAuth("test_sk_example", "") }
+                .build(),
+        )
+
+        server.expect(requestTo("http://localhost/v1/payments/toss-payment-key-4/cancel"))
+            .andExpect(method(org.springframework.http.HttpMethod.POST))
+            .andExpect(header(HttpHeaders.AUTHORIZATION, basicAuth("test_sk_example")))
+            .andExpect(header("Idempotency-Key", "cancel-key-4"))
+            .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+            .andExpect(content().json("""
+                {
+                  "cancelReason": "customer request"
+                }
+            """.trimIndent()))
+            .andRespond(
+                withSuccess(
+                    """
+                    {
+                      "paymentKey": "toss-payment-key-4",
+                      "status": "CANCELED",
+                      "cancels": [{"transactionKey": "cancel-tx-4"}]
+                    }
+                    """.trimIndent(),
+                    MediaType.APPLICATION_JSON,
+                ),
+            )
+
+        val result = gateway.cancel(
+            PaymentGatewayCancellationRequest(
+                paymentId = 4,
+                providerTransactionId = "toss-payment-key-4",
+                cancelReason = "customer request",
+                cancellationIdempotencyKey = "cancel-key-4",
+            ),
+        )
+
+        assertEquals("cancel-tx-4", result.providerCancellationId)
+        server.verify()
+    }
+
+    @Test
+    fun `cancel rejects before making a request when provider transaction id is missing`() {
+        val builder = RestClient.builder().baseUrl("http://localhost")
+        val server = MockRestServiceServer.bindTo(builder).build()
+        val gateway = TossPaymentGateway(
+            properties = TossPaymentGatewayProperties(
+                baseUrl = "http://localhost",
+                secretKey = "test_sk_example",
+            ),
+            restClient = builder.build(),
+        )
+
+        assertThrows(PaymentGatewayRequestException::class.java) {
+            gateway.cancel(
+                PaymentGatewayCancellationRequest(
+                    paymentId = 5,
+                    providerTransactionId = null,
+                ),
+            )
+        }
+
+        server.verify()
+    }
+
     private fun basicAuth(secretKey: String): String {
         val encoded = Base64.getEncoder().encodeToString("$secretKey:".toByteArray(StandardCharsets.UTF_8))
         return "Basic $encoded"

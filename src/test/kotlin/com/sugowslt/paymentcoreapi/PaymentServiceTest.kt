@@ -9,6 +9,7 @@ import com.sugowslt.paymentcoreapi.exception.InvalidPaymentStatusTransitionExcep
 import com.sugowslt.paymentcoreapi.exception.PaymentNotFoundException
 import com.sugowslt.paymentcoreapi.gateway.PaymentGateway
 import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayApprovalResult
+import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayCancellationResult
 import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayRejectedException
 import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayUnavailableException
 import com.sugowslt.paymentcoreapi.repository.PaymentRepository
@@ -246,9 +247,33 @@ class PaymentServiceTest {
                 createdAt = LocalDateTime.now(),
             )
 
+        every { paymentGateway.cancel(any()) } returns PaymentGatewayCancellationResult("cancel-tx-20")
+
         val result = paymentService.cancelPayment(20L)
 
         assertEquals(PaymentStatus.CANCELED, result.status)
+    }
+
+    @Test
+    fun `cancel payment keeps approved when gateway rejects cancellation`() {
+        val payment = Payment(
+            id = 21,
+            orderId = 223,
+            idempotencyKey = "cancel-unit-key-21",
+            amount = BigDecimal("2100.00"),
+            method = PaymentMethod.CARD,
+            status = PaymentStatus.APPROVED,
+            providerTransactionId = "provider-tx-21",
+            createdAt = LocalDateTime.now(),
+        )
+        every { paymentRepository.findByIdAndDeletedFalse(21L) } returns payment
+        every { paymentGateway.cancel(any()) } throws PaymentGatewayRejectedException("not cancelable")
+
+        assertThrows(PaymentGatewayRejectedException::class.java) {
+            paymentService.cancelPayment(21L)
+        }
+
+        assertEquals(PaymentStatus.APPROVED, payment.status)
     }
 
     @Test

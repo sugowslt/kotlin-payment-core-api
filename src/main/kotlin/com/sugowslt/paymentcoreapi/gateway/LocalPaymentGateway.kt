@@ -11,4 +11,10 @@ class LocalPaymentGateway : PaymentGateway {
             providerTransactionId = "local-${request.paymentId}",
         )
     }
+
+    override fun cancel(request: PaymentGatewayCancellationRequest): PaymentGatewayCancellationResult {
+        return PaymentGatewayCancellationResult(
+            providerCancellationId = "local-cancel-${request.paymentId}",
+        )
+    }
 }

@@ -5,6 +5,8 @@ import java.math.BigDecimal
 
 interface PaymentGateway {
     fun approve(request: PaymentGatewayApprovalRequest): PaymentGatewayApprovalResult
+
+    fun cancel(request: PaymentGatewayCancellationRequest): PaymentGatewayCancellationResult
 }
 
 data class PaymentGatewayApprovalRequest(
@@ -18,4 +20,15 @@ data class PaymentGatewayApprovalRequest(
 
 data class PaymentGatewayApprovalResult(
     val providerTransactionId: String,
+)
+
+data class PaymentGatewayCancellationRequest(
+    val paymentId: Long,
+    val providerTransactionId: String?,
+    val cancelReason: String = "customer requested cancellation",
+    val cancellationIdempotencyKey: String = "payment-cancel-$paymentId",
+)
+
+data class PaymentGatewayCancellationResult(
+    val providerCancellationId: String? = null,
 )

@@ -12,6 +12,7 @@ import com.sugowslt.paymentcoreapi.exception.InvalidPaymentStatusTransitionExcep
 import com.sugowslt.paymentcoreapi.exception.PaymentNotFoundException
 import com.sugowslt.paymentcoreapi.gateway.PaymentGateway
 import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayApprovalRequest
+import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayCancellationRequest
 import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayRejectedException
 import com.sugowslt.paymentcoreapi.repository.PaymentRepository
 import org.springframework.data.domain.PageRequest
@@ -85,7 +86,7 @@ class PaymentService(
         return payment.toResponse()
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = [PaymentGatewayRejectedException::class])
     fun cancelPayment(paymentId: Long): CreatePaymentResponse {
         val payment = paymentRepository.findByIdAndDeletedFalse(paymentId)
             ?: throw PaymentNotFoundException("payment not found. id=$paymentId")
@@ -96,6 +97,12 @@ class PaymentService(
             )
         }
 
+        paymentGateway.cancel(
+            PaymentGatewayCancellationRequest(
+                paymentId = payment.id,
+                providerTransactionId = payment.providerTransactionId,
+            ),
+        )
         payment.cancel()
         paymentOutboxService.enqueuePaymentEvent(payment, "PAYMENT_CANCELED")
 
