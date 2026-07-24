@@ -48,3 +48,7 @@ payment:
   outbox:
     max-retries: ${PAYMENT_OUTBOX_MAX_RETRIES:3}
     retry-delay-seconds: ${PAYMENT_OUTBOX_RETRY_DELAY_SECONDS:30}
+    worker:
+      # 대시보드 데모와 수동 검증을 위해 기본값은 비활성화합니다.
+      enabled: ${PAYMENT_OUTBOX_WORKER_ENABLED:false}
+      fixed-delay-ms: ${PAYMENT_OUTBOX_WORKER_FIXED_DELAY_MS:30000}

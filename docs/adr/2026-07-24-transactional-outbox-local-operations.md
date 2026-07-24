@@ -27,6 +27,6 @@
 
 ## 제한과 다음 단계
 
-- 현재 `publish`는 실제 외부 브로커 발행이나 consumer offset 관리를 구현하지 않았습니다. 재시도·최종 실패 상태 기준은 [아웃박스 재시도 ADR](2026-07-24-outbox-retry-policy.md)에서 관리합니다.
+- 현재 `publish`는 실제 외부 브로커 발행이나 consumer offset 관리를 구현하지 않았습니다. worker 활성화와 DB 잠금 기준은 [아웃박스 worker ADR](2026-07-24-outbox-worker-concurrency.md), 재시도·최종 실패 상태 기준은 [아웃박스 재시도 ADR](2026-07-24-outbox-retry-policy.md)에서 관리합니다.
 - 다음 단계에서 브로커를 도입하더라도 이 테이블을 발행 기준으로 유지하고, publisher 오류 분류와 최종 실패 알림을 별도 정책으로 검토합니다.
 - Toss 실결제 API와 외부 유료 모니터링 서비스는 이 결정과 검증에서 사용하지 않았습니다.

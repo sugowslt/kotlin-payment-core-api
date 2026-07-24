@@ -895,6 +895,47 @@ class PaymentControllerIntegrationTest(
     }
 
     @Test
+    fun `concurrent outbox publish processes the same event once`() {
+        mockMvc.perform(
+            post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "orderId": 8114,
+                      "idempotencyKey": "outbox-concurrent-8114",
+                      "amount": 21000.00,
+                      "method": "CARD"
+                    }
+                    """.trimIndent(),
+                ),
+        ).andExpect(status().isCreated)
+
+        val executor = Executors.newFixedThreadPool(2)
+        val futures = (1..2).map {
+            executor.submit<Int> {
+                mockMvc.perform(
+                    post("/api/v1/internal/outbox/publish")
+                        .header("X-Webhook-Replay-Token", "test-replay-token"),
+                ).andReturn().response.status
+            }
+        }
+
+        val statuses = futures.map { it.get(10, TimeUnit.SECONDS) }
+        executor.shutdown()
+        executor.awaitTermination(10, TimeUnit.SECONDS)
+
+        assertEquals(listOf(200, 200), statuses.sorted())
+        mockMvc.perform(
+            get("/api/v1/internal/outbox/metrics")
+                .header("X-Webhook-Replay-Token", "test-replay-token"),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.pendingEvents").value(0))
+            .andExpect(jsonPath("$.publishedEvents").value(1))
+    }
+
+    @Test
     fun `failed outbox event can be manually requeued with replay token`() {
         mockMvc.perform(
             post("/api/v1/payments")
