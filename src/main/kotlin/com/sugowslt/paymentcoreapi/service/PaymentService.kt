@@ -10,6 +10,9 @@ import com.sugowslt.paymentcoreapi.entity.PaymentStatus
 import com.sugowslt.paymentcoreapi.exception.DuplicatePaymentException
 import com.sugowslt.paymentcoreapi.exception.InvalidPaymentStatusTransitionException
 import com.sugowslt.paymentcoreapi.exception.PaymentNotFoundException
+import com.sugowslt.paymentcoreapi.gateway.PaymentGateway
+import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayApprovalRequest
+import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayRejectedException
 import com.sugowslt.paymentcoreapi.repository.PaymentRepository
 import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Pageable
@@ -19,6 +22,8 @@ import org.springframework.transaction.annotation.Transactional
 @Service
 class PaymentService(
     private val paymentRepository: PaymentRepository,
+    private val paymentGateway: PaymentGateway,
+    private val paymentOutboxService: PaymentOutboxService,
 ) {
 
     @Transactional
@@ -29,9 +34,13 @@ class PaymentService(
         payment.markDeleted()
     }
 
-    @Transactional
-    fun approvePayment(paymentId: Long, approvalIdempotencyKey: String): CreatePaymentResponse {
-        val payment = paymentRepository.findByIdAndDeletedFalse(paymentId)
+    @Transactional(noRollbackFor = [PaymentGatewayRejectedException::class])
+    fun approvePayment(
+        paymentId: Long,
+        approvalIdempotencyKey: String,
+        paymentKey: String? = null,
+    ): CreatePaymentResponse {
+        val payment = paymentRepository.findByIdAndDeletedFalseForUpdate(paymentId)
             ?: throw PaymentNotFoundException("payment not found. id=$paymentId")
 
         val normalizedKey = approvalIdempotencyKey.trim()
@@ -52,8 +61,26 @@ class PaymentService(
             )
         }
 
+        val gatewayResult = try {
+            paymentGateway.approve(
+                PaymentGatewayApprovalRequest(
+                    paymentId = payment.id,
+                    orderId = payment.orderId,
+                    amount = payment.amount,
+                    method = payment.method,
+                    approvalIdempotencyKey = normalizedKey,
+                    paymentKey = paymentKey?.trim()?.takeUnless { it.isNullOrBlank() },
+                ),
+            )
+        } catch (ex: PaymentGatewayRejectedException) {
+            payment.approvalIdempotencyKey = normalizedKey
+            payment.markFailed()
+            throw ex
+        }
+
         payment.approvalIdempotencyKey = normalizedKey
-        payment.approve()
+        payment.approve(gatewayResult.providerTransactionId)
+        paymentOutboxService.enqueuePaymentEvent(payment, "PAYMENT_APPROVED")
 
         return payment.toResponse()
     }
@@ -70,6 +97,7 @@ class PaymentService(
         }
 
         payment.cancel()
+        paymentOutboxService.enqueuePaymentEvent(payment, "PAYMENT_CANCELED")
 
         return CreatePaymentResponse(
             id = payment.id,
@@ -160,6 +188,8 @@ class PaymentService(
                 method = request.method,
             ),
         )
+
+        paymentOutboxService.enqueuePaymentEvent(saved, "PAYMENT_CREATED")
 
         return CreatePaymentResponse(
             id = saved.id,

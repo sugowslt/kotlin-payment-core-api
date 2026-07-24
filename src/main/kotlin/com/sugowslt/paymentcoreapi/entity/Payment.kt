@@ -34,6 +34,9 @@ class Payment(
     @Column(name = "approval_idempotency_key", unique = true, length = 120)
     var approvalIdempotencyKey: String? = null,
 
+    @Column(name = "provider_transaction_id", unique = true, length = 120)
+    var providerTransactionId: String? = null,
+
     @Column(nullable = false, precision = 18, scale = 2)
     val amount: BigDecimal,
 
@@ -54,8 +57,14 @@ class Payment(
     @Column(name = "deleted", nullable = false)
     var deleted: Boolean = false,
 ) {
-    fun approve() {
+    fun approve(providerTransactionId: String) {
         status = PaymentStatus.APPROVED
+        this.providerTransactionId = providerTransactionId
+        updatedAt = LocalDateTime.now()
+    }
+
+    fun markFailed() {
+        status = PaymentStatus.FAILED
         updatedAt = LocalDateTime.now()
     }
 

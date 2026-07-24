@@ -111,6 +111,40 @@ class GlobalExceptionHandler {
             )
     }
 
+    @ExceptionHandler(InvalidWebhookException::class)
+    fun handleInvalidWebhook(
+        ex: InvalidWebhookException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+            .body(
+                ApiErrorResponse(
+                    timestamp = LocalDateTime.now(),
+                    code = "INVALID_WEBHOOK",
+                    message = ex.message ?: "invalid webhook",
+                    path = request.requestURI,
+                    traceId = traceIdOf(request),
+                ),
+            )
+    }
+
+    @ExceptionHandler(WebhookReplayAccessDeniedException::class)
+    fun handleWebhookReplayAccessDenied(
+        ex: WebhookReplayAccessDeniedException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+            .body(
+                ApiErrorResponse(
+                    timestamp = LocalDateTime.now(),
+                    code = "WEBHOOK_REPLAY_FORBIDDEN",
+                    message = ex.message ?: "webhook replay is forbidden",
+                    path = request.requestURI,
+                    traceId = traceIdOf(request),
+                ),
+            )
+    }
+
     @ExceptionHandler(HttpMessageNotReadableException::class)
     fun handleNotReadable(
         request: HttpServletRequest,

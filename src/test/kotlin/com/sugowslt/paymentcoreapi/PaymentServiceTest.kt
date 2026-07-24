@@ -7,8 +7,13 @@ import com.sugowslt.paymentcoreapi.entity.PaymentStatus
 import com.sugowslt.paymentcoreapi.exception.DuplicatePaymentException
 import com.sugowslt.paymentcoreapi.exception.InvalidPaymentStatusTransitionException
 import com.sugowslt.paymentcoreapi.exception.PaymentNotFoundException
+import com.sugowslt.paymentcoreapi.gateway.PaymentGateway
+import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayApprovalResult
+import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayRejectedException
+import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayUnavailableException
 import com.sugowslt.paymentcoreapi.repository.PaymentRepository
 import com.sugowslt.paymentcoreapi.service.PaymentService
+import com.sugowslt.paymentcoreapi.service.PaymentOutboxService
 import io.mockk.MockKAnnotations
 import io.mockk.every
 import io.mockk.impl.annotations.MockK
@@ -26,12 +31,18 @@ class PaymentServiceTest {
     @MockK
     lateinit var paymentRepository: PaymentRepository
 
+    @MockK
+    lateinit var paymentGateway: PaymentGateway
+
+    @MockK(relaxed = true)
+    lateinit var paymentOutboxService: PaymentOutboxService
+
     lateinit var paymentService: PaymentService
 
     @BeforeEach
     fun setUp() {
         MockKAnnotations.init(this)
-        paymentService = PaymentService(paymentRepository)
+        paymentService = PaymentService(paymentRepository, paymentGateway, paymentOutboxService)
     }
 
     @Test
@@ -119,7 +130,7 @@ class PaymentServiceTest {
 
     @Test
     fun `approve payment changes status from pending to approved`() {
-        every { paymentRepository.findByIdAndDeletedFalse(10L) } returns
+        every { paymentRepository.findByIdAndDeletedFalseForUpdate(10L) } returns
             Payment(
                 id = 10,
                 orderId = 111,
@@ -130,14 +141,62 @@ class PaymentServiceTest {
                 createdAt = LocalDateTime.now(),
             )
 
+        every { paymentGateway.approve(any()) } returns PaymentGatewayApprovalResult("provider-tx-10")
+
         val result = paymentService.approvePayment(10L, "approve-unit-key")
 
         assertEquals(PaymentStatus.APPROVED, result.status)
+        verify(exactly = 1) { paymentGateway.approve(any()) }
+        verify(exactly = 1) { paymentRepository.findByIdAndDeletedFalseForUpdate(10L) }
+    }
+
+    @Test
+    fun `approve payment marks failed when gateway rejects payment`() {
+        val payment = Payment(
+            id = 13,
+            orderId = 114,
+            idempotencyKey = "payment-key-13",
+            amount = BigDecimal("1300.00"),
+            method = PaymentMethod.CARD,
+            status = PaymentStatus.PENDING,
+            createdAt = LocalDateTime.now(),
+        )
+        every { paymentRepository.findByIdAndDeletedFalseForUpdate(13L) } returns payment
+        every { paymentGateway.approve(any()) } throws PaymentGatewayRejectedException("card declined")
+
+        assertThrows(PaymentGatewayRejectedException::class.java) {
+            paymentService.approvePayment(13L, "rejected-key-13")
+        }
+
+        assertEquals(PaymentStatus.FAILED, payment.status)
+        assertEquals("rejected-key-13", payment.approvalIdempotencyKey)
+    }
+
+    @Test
+    fun `approve payment keeps pending when gateway is temporarily unavailable`() {
+        val payment = Payment(
+            id = 14,
+            orderId = 115,
+            idempotencyKey = "payment-key-14",
+            amount = BigDecimal("1400.00"),
+            method = PaymentMethod.CARD,
+            status = PaymentStatus.PENDING,
+            createdAt = LocalDateTime.now(),
+        )
+        every { paymentRepository.findByIdAndDeletedFalseForUpdate(14L) } returns payment
+        every { paymentGateway.approve(any()) } throws PaymentGatewayUnavailableException("gateway timeout")
+
+        assertThrows(PaymentGatewayUnavailableException::class.java) {
+            paymentService.approvePayment(14L, "retryable-key-14")
+        }
+
+        assertEquals(PaymentStatus.PENDING, payment.status)
+        assertEquals(null, payment.approvalIdempotencyKey)
     }
 
     @Test
     fun `approve payment returns the existing response when approved with the same key`() {
-        every { paymentRepository.findByIdAndDeletedFalse(11L) } returns
+        every { paymentRepository.findByIdAndDeletedFalseForUpdate(11L) } returns
             Payment(
                 id = 11,
                 orderId = 112,
@@ -157,7 +216,7 @@ class PaymentServiceTest {
 
     @Test
     fun `approve payment rejects a different key after approval`() {
-        every { paymentRepository.findByIdAndDeletedFalse(12L) } returns
+        every { paymentRepository.findByIdAndDeletedFalseForUpdate(12L) } returns
             Payment(
                 id = 12,
                 orderId = 113,
@@ -194,7 +253,7 @@ class PaymentServiceTest {
 
     @Test
     fun `approve payment throws conflict when status is not pending`() {
-        every { paymentRepository.findByIdAndDeletedFalse(30L) } returns
+        every { paymentRepository.findByIdAndDeletedFalseForUpdate(30L) } returns
             Payment(
                 id = 30,
                 orderId = 333,

@@ -45,6 +45,14 @@ async function requestJson(url, options = {}, failureLabel = '요청') {
   }
 }
 
+const localOperationsToken = import.meta.env.VITE_WEBHOOK_REPLAY_TOKEN || 'local-dashboard-replay-token'
+
+function operationsHeaders() {
+  return {
+    'X-Webhook-Replay-Token': localOperationsToken,
+  }
+}
+
 export async function getPaymentsCursor(cursorId, size = 20) {
   const query = new URLSearchParams({ size: String(size) })
   if (cursorId) {
@@ -68,4 +76,43 @@ export async function transitionPayment(paymentId, action) {
   return requestJson(`/api/v1/payments/${paymentId}/${action}`, {
     method: 'POST',
   }, action)
+}
+
+export async function approvePayment(paymentId, idempotencyKey) {
+  return requestJson(`/api/v1/payments/${paymentId}/approve`, {
+    method: 'POST',
+    headers: {
+      'Idempotency-Key': idempotencyKey,
+    },
+  }, '결제 승인')
+}
+
+export async function sendPaymentStatusWebhook(payload, transmissionId) {
+  return requestJson('/api/v1/webhooks/toss/payments', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'tosspayments-webhook-transmission-id': transmissionId,
+    },
+    body: JSON.stringify(payload),
+  }, '결제 웹훅 처리')
+}
+
+export async function getWebhookMetrics() {
+  return requestJson('/api/v1/internal/webhooks/metrics', {
+    headers: operationsHeaders(),
+  }, '웹훅 지표 조회')
+}
+
+export async function getOutboxMetrics() {
+  return requestJson('/api/v1/internal/outbox/metrics', {
+    headers: operationsHeaders(),
+  }, '아웃박스 지표 조회')
+}
+
+export async function publishOutbox() {
+  return requestJson('/api/v1/internal/outbox/publish', {
+    method: 'POST',
+    headers: operationsHeaders(),
+  }, '아웃박스 로컬 처리')
 }

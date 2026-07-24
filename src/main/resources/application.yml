@@ -32,3 +32,19 @@ springdoc:
     path: /api-docs
   swagger-ui:
     path: /swagger-ui.html
+
+payment:
+  gateway:
+    provider: ${PAYMENT_GATEWAY_PROVIDER:local}
+    toss:
+      base-url: ${TOSS_PAYMENT_BASE_URL:https://api.tosspayments.com}
+      secret-key: ${TOSS_PAYMENT_SECRET_KEY:}
+      connect-timeout-ms: ${TOSS_PAYMENT_CONNECT_TIMEOUT_MS:1000}
+      read-timeout-ms: ${TOSS_PAYMENT_READ_TIMEOUT_MS:3000}
+      max-retries: ${TOSS_PAYMENT_MAX_RETRIES:1}
+  webhook:
+    # 로컬 대시보드 확인용 기본값입니다. 운영 환경에서는 반드시 환경변수로 교체합니다.
+    replay-token: ${PAYMENT_WEBHOOK_REPLAY_TOKEN:local-dashboard-replay-token}
+  outbox:
+    max-retries: ${PAYMENT_OUTBOX_MAX_RETRIES:3}
+    retry-delay-seconds: ${PAYMENT_OUTBOX_RETRY_DELAY_SECONDS:30}

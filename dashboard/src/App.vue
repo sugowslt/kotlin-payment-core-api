@@ -1,8 +1,21 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { createPayment, getPaymentsCursor, transitionPayment } from './api'
+import {
+  approvePayment,
+  createPayment,
+  getOutboxMetrics,
+  getPaymentsCursor,
+  getWebhookMetrics,
+  publishOutbox,
+  sendPaymentStatusWebhook,
+  transitionPayment,
+} from './api'
 
-const activeView = ref('showcase')
+const activeView = ref('walkthrough')
+const operations = ref({ webhook: null, outbox: null })
+const operationsLoading = ref(false)
+const operationsError = ref('')
+const operationsMessage = ref('')
 
 const projects = [
   {
@@ -110,6 +123,7 @@ const creatingDemo = ref(false)
 const listError = ref('')
 
 const paymentId = ref('')
+const approvalKey = ref('dashboard-approve-key')
 const actionMessage = ref('')
 const actionLoading = ref(false)
 
@@ -130,6 +144,116 @@ const counts = computed(() => {
 })
 
 const selectedPayment = computed(() => payments.value.find((payment) => String(payment.id) === String(paymentId.value)) || null)
+
+const walkthroughScenarios = [
+  {
+    id: 'lifecycle',
+    title: '결제 생명주기',
+    summary: '생성 → 승인 → 취소 상태 전이를 한 번에 확인합니다.',
+    tags: ['PaymentService', '상태 전이', 'Outbox'],
+  },
+  {
+    id: 'idempotency',
+    title: '승인 멱등성',
+    summary: '같은 Idempotency-Key로 승인 요청을 반복해도 한 번만 처리되는 흐름입니다.',
+    tags: ['Idempotency-Key', 'Pessimistic Lock', '409/200'],
+  },
+  {
+    id: 'webhook',
+    title: '웹훅 보정',
+    summary: 'PG 상태 웹훅으로 결제 상태를 보정하고 동일 transmission ID 중복을 확인합니다.',
+    tags: ['Webhook', 'Reconciliation', 'Duplicate'],
+  },
+  {
+    id: 'outbox',
+    title: '트랜잭션 아웃박스',
+    summary: '결제 변경 이벤트를 DB에 저장한 뒤 로컬 발행 시뮬레이션으로 상태를 전환합니다.',
+    tags: ['Atomicity', 'PENDING', 'PUBLISHED'],
+  },
+]
+
+const selectedWalkthroughId = ref('lifecycle')
+const walkthroughRunning = ref(false)
+const walkthroughMessage = ref('시나리오를 선택하고 실행하면 실제 localhost API 처리 결과가 아래에 기록됩니다.')
+const walkthroughSteps = ref([])
+const selectedWalkthrough = computed(() => walkthroughScenarios.find((scenario) => scenario.id === selectedWalkthroughId.value))
+
+function appendWalkthroughStep(title, detail, status = '완료') {
+  walkthroughSteps.value.push({ title, detail, status })
+}
+
+async function runWalkthrough() {
+  if (walkthroughRunning.value) {
+    return
+  }
+
+  walkthroughRunning.value = true
+  walkthroughSteps.value = []
+  walkthroughMessage.value = `${selectedWalkthrough.value.title} 시나리오를 실행하고 있습니다.`
+
+  try {
+    if (selectedWalkthroughId.value === 'lifecycle') {
+      const created = await createPayment(makeDemoPayload())
+      appendWalkthroughStep('1. 결제 생성', `POST /api/v1/payments → paymentId=${created.body.id}, status=${created.body.status}`)
+      const approved = await approvePayment(created.body.id, `walkthrough-approve-${created.body.id}`)
+      appendWalkthroughStep('2. 결제 승인', `PaymentGateway(local) → status=${approved.body.status}, traceId=${approved.traceId ?? '-'}`)
+      const canceled = await transitionPayment(created.body.id, 'cancel')
+      appendWalkthroughStep('3. 결제 취소', `상태 전이 완료 → status=${canceled.body.status}, traceId=${canceled.traceId ?? '-'}`)
+      appendWalkthroughStep('4. 이벤트 적재', '생성·승인·취소 이벤트가 트랜잭션 아웃박스에 저장됩니다.')
+      walkthroughMessage.value = '결제 생명주기 시나리오가 완료되었습니다.'
+    }
+
+    if (selectedWalkthroughId.value === 'idempotency') {
+      const created = await createPayment(makeDemoPayload())
+      const key = `walkthrough-idempotency-${created.body.id}`
+      appendWalkthroughStep('1. 결제 생성', `paymentId=${created.body.id}, status=${created.body.status}`)
+      const first = await approvePayment(created.body.id, key)
+      appendWalkthroughStep('2. 첫 승인 요청', `Idempotency-Key=${key} → ${first.body.status}`)
+      const retry = await approvePayment(created.body.id, key)
+      appendWalkthroughStep('3. 같은 키 재요청', `기존 승인 결과 재사용 → ${retry.body.status}`)
+      appendWalkthroughStep('4. 보호 지점', '같은 키는 200으로 재응답하고, 다른 키는 상태 전이 충돌로 409를 반환합니다.')
+      walkthroughMessage.value = '승인 멱등성 시나리오가 완료되었습니다.'
+    }
+
+    if (selectedWalkthroughId.value === 'webhook') {
+      const created = await createPayment(makeDemoPayload())
+      const transmissionId = `walkthrough-webhook-${created.body.id}`
+      const payload = {
+        eventType: 'PAYMENT_STATUS_CHANGED',
+        createdAt: new Date().toISOString(),
+        data: {
+          paymentKey: `local-payment-key-${created.body.id}`,
+          orderId: String(created.body.orderId),
+          status: 'DONE',
+        },
+      }
+      appendWalkthroughStep('1. 결제 생성', `paymentId=${created.body.id}, status=${created.body.status}`)
+      const processed = await sendPaymentStatusWebhook(payload, transmissionId)
+      appendWalkthroughStep('2. 웹훅 수신', `transmissionId=${transmissionId} → ${processed.body.result}`)
+      const duplicate = await sendPaymentStatusWebhook(payload, transmissionId)
+      appendWalkthroughStep('3. 중복 웹훅', `같은 transmission ID → ${duplicate.body.result}`)
+      appendWalkthroughStep('4. 상태 보정', `PENDING → APPROVED, 원문 payload는 재처리용으로 저장됩니다.`)
+      walkthroughMessage.value = '웹훅 보정과 중복 방지 시나리오가 완료되었습니다.'
+    }
+
+    if (selectedWalkthroughId.value === 'outbox') {
+      const created = await createPayment(makeDemoPayload())
+      const before = await getOutboxMetrics()
+      appendWalkthroughStep('1. 결제 생성', `paymentId=${created.body.id} → 아웃박스 pending=${before.body.pendingEvents}`)
+      const published = await publishOutbox()
+      appendWalkthroughStep('2. 로컬 발행 시뮬레이션', `PENDING → PUBLISHED, published=${published.body.publishedEvents}`)
+      const after = await getOutboxMetrics()
+      appendWalkthroughStep('3. 운영 지표 확인', `pending=${after.body.pendingEvents}, retrying=${after.body.retryingEvents}, failed=${after.body.failedEvents}`)
+      appendWalkthroughStep('4. 설계 범위', '현재는 외부 Kafka 없이 DB 상태 전환으로 검증하며, 실제 브로커는 다음 확장 지점입니다.')
+      walkthroughMessage.value = '트랜잭션 아웃박스 시나리오가 완료되었습니다.'
+    }
+  } catch (error) {
+    appendWalkthroughStep('시나리오 오류', `${error.message} / traceId=${error.traceId ?? '-'}`, '확인 필요')
+    walkthroughMessage.value = '시나리오 실행 중 오류가 발생했습니다. 아래 기록과 traceId를 확인하세요.'
+  } finally {
+    walkthroughRunning.value = false
+  }
+}
 
 function makeDemoPayload(index = 0) {
   const timestamp = Date.now()
@@ -217,7 +341,9 @@ async function runAction(action) {
   actionMessage.value = ''
 
   try {
-    const updated = await transitionPayment(id, action)
+    const updated = action === 'approve'
+      ? await approvePayment(id, approvalKey.value.trim() || `dashboard-approve-${Date.now()}`)
+      : await transitionPayment(id, action)
     totalRequests.value += 1
     successRequests.value += 1
     lastTraceId.value = updated.traceId || '-'
@@ -291,9 +417,40 @@ async function seedDemoPayments(count = 5) {
   }
 }
 
+async function loadOperations() {
+  operationsLoading.value = true
+  operationsError.value = ''
+  try {
+    const [webhook, outbox] = await Promise.all([getWebhookMetrics(), getOutboxMetrics()])
+    operations.value = { webhook: webhook.body, outbox: outbox.body }
+  } catch (error) {
+    operationsError.value = `${error.message} / traceId=${error.traceId ?? '-'}`
+  } finally {
+    operationsLoading.value = false
+  }
+}
+
+async function publishOutboxFromDashboard() {
+  operationsLoading.value = true
+  operationsError.value = ''
+  operationsMessage.value = ''
+  try {
+    const result = await publishOutbox()
+    operationsMessage.value = `로컬 처리 완료: pending=${result.body.pendingEvents}, published=${result.body.publishedEvents}`
+    await loadOperations()
+  } catch (error) {
+    operationsError.value = `${error.message} / traceId=${error.traceId ?? '-'}`
+  } finally {
+    operationsLoading.value = false
+  }
+}
+
 watch(activeView, async (view) => {
   if (view === 'payment-demo' && !loadingList.value && payments.value.length === 0 && !listError.value) {
     await loadFirstPage()
+  }
+  if (view === 'operations' && !operationsLoading.value) {
+    await loadOperations()
   }
 })
 
@@ -323,15 +480,105 @@ onMounted(async () => {
   </div>
 
   <div class="tabs">
+    <button :class="['tab-button', { active: activeView === 'walkthrough' }]" @click="activeView = 'walkthrough'">
+      프로젝트 가이드
+    </button>
     <button :class="['tab-button', { active: activeView === 'showcase' }]" @click="activeView = 'showcase'">
       개요
     </button>
     <button :class="['tab-button', { active: activeView === 'payment-demo' }]" @click="activeView = 'payment-demo'">
       Payment Demo
     </button>
+    <button :class="['tab-button', { active: activeView === 'operations' }]" @click="activeView = 'operations'">
+      운영 대시보드
+    </button>
   </div>
 
-  <template v-if="activeView === 'showcase'">
+  <template v-if="activeView === 'walkthrough'">
+    <div class="section-header">
+      <h2>기능별 처리 과정</h2>
+      <p class="meta">백엔드 코드를 읽지 않아도 결제 프로젝트의 핵심 설계와 실제 API 흐름을 단계별로 확인할 수 있습니다.</p>
+    </div>
+
+    <section class="walkthrough-layout section">
+      <div class="card scenario-list">
+        <div class="section-header compact">
+          <h3>시연 시나리오</h3>
+          <p class="meta">각 버튼은 localhost 백엔드 API를 실제로 호출합니다.</p>
+        </div>
+        <button
+          v-for="scenario in walkthroughScenarios"
+          :key="scenario.id"
+          :class="['scenario-button', { active: selectedWalkthroughId === scenario.id }]"
+          @click="selectedWalkthroughId = scenario.id"
+        >
+          <strong>{{ scenario.title }}</strong>
+          <span>{{ scenario.summary }}</span>
+          <small>{{ scenario.tags.join(' · ') }}</small>
+        </button>
+        <button class="scenario-run-button" @click="runWalkthrough" :disabled="walkthroughRunning">
+          {{ walkthroughRunning ? '시나리오 실행 중...' : '선택한 시나리오 실행' }}
+        </button>
+      </div>
+
+      <div class="card">
+        <div class="section-header compact">
+          <span class="project-badge">{{ selectedWalkthrough?.title }}</span>
+          <h3>{{ selectedWalkthrough?.summary }}</h3>
+          <p class="meta">{{ walkthroughMessage }}</p>
+        </div>
+
+        <div class="flow-rail">
+          <div class="flow-node">Client</div>
+          <span>→</span>
+          <div class="flow-node">Controller</div>
+          <span>→</span>
+          <div class="flow-node">Service</div>
+          <span>→</span>
+          <div class="flow-node">DB / PG</div>
+        </div>
+
+        <div v-if="walkthroughSteps.length === 0" class="empty-state walkthrough-empty">
+          실행 결과가 여기에 시간순으로 표시됩니다.
+        </div>
+        <div v-else class="scenario-log">
+          <article v-for="(step, index) in walkthroughSteps" :key="step.title + '-' + index" class="scenario-log-item">
+            <div class="timeline-dot"></div>
+            <div>
+              <div class="row space-between">
+                <strong>{{ step.title }}</strong>
+                <span :class="['status-pill', { warning: step.status !== '완료' }]">{{ step.status }}</span>
+              </div>
+              <p>{{ step.detail }}</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="project-grid section">
+      <article class="card project-card tone-blue">
+        <div class="project-head"><span class="project-badge">API 품질</span><span class="project-stage">핵심</span></div>
+        <h3>멱등성과 동시성</h3>
+        <p class="project-highlight">중복 승인 요청을 안전하게 처리하고, 서로 다른 승인 키가 동시에 들어오면 한 요청만 상태를 변경합니다.</p>
+        <div class="chip-list"><span class="chip">Idempotency-Key</span><span class="chip">Pessimistic Lock</span><span class="chip">409 Conflict</span></div>
+      </article>
+      <article class="card project-card tone-violet">
+        <div class="project-head"><span class="project-badge">외부 연동</span><span class="project-stage">경계</span></div>
+        <h3>PG·웹훅 보정</h3>
+        <p class="project-highlight">PG 승인 결과와 웹훅 상태를 분리하고, 실패·일시 장애·중복 이벤트를 서로 다른 운영 흐름으로 기록합니다.</p>
+        <div class="chip-list"><span class="chip">Gateway Boundary</span><span class="chip">Retry</span><span class="chip">Reconciliation</span></div>
+      </article>
+      <article class="card project-card tone-emerald">
+        <div class="project-head"><span class="project-badge">운영 근거</span><span class="project-stage">문서화</span></div>
+        <h3>검증과 의사결정</h3>
+        <p class="project-highlight">H2/MySQL 테스트, ADR, 트러블슈팅 기록을 연결해 구현뿐 아니라 선택 이유와 장애 대응 과정까지 설명합니다.</p>
+        <div class="chip-list"><span class="chip">39 Tests</span><span class="chip">ADR</span><span class="chip">Troubleshooting</span></div>
+      </article>
+    </section>
+  </template>
+
+  <template v-else-if="activeView === 'showcase'">
     <section class="section">
       <div class="section-header">
         <h2>주요 구현</h2>
@@ -424,6 +671,60 @@ onMounted(async () => {
     </section>
   </template>
 
+  <template v-else-if="activeView === 'operations'">
+    <div class="section-header">
+      <h2>운영 대시보드</h2>
+      <p class="meta">웹훅 재처리 상태와 트랜잭션 아웃박스 적재 상태를 로컬에서 확인합니다.</p>
+    </div>
+
+    <section class="card section demo-helper-card">
+      <div class="demo-helper-top">
+        <div>
+          <h3>운영 확인 포인트</h3>
+          <p class="meta">외부 Kafka, 클라우드 모니터링, 실결제 API 없이 로컬 DB에 저장된 운영 지표만 조회합니다.</p>
+        </div>
+        <div class="row wrap-row">
+          <button @click="loadOperations" :disabled="operationsLoading">지표 새로고침</button>
+          <button @click="publishOutboxFromDashboard" :disabled="operationsLoading">대기 아웃박스 로컬 처리</button>
+        </div>
+      </div>
+      <p v-if="operationsError" class="meta error-text">{{ operationsError }}</p>
+      <p v-else class="meta">{{ operationsMessage || '운영 지표를 확인할 준비가 되었습니다.' }}</p>
+    </section>
+
+    <div class="project-grid">
+      <section class="card project-card tone-blue">
+        <div class="project-head">
+          <span class="project-badge">Webhook</span>
+          <span class="project-stage">로컬 지표</span>
+        </div>
+        <h3>웹훅 상태</h3>
+        <div class="metrics">
+          <div class="metric">전체: {{ operations.webhook?.totalEvents ?? '-' }}</div>
+          <div class="metric">처리 완료: {{ operations.webhook?.processedEvents ?? '-' }}</div>
+          <div class="metric">재처리: {{ operations.webhook?.reprocessedEvents ?? '-' }}</div>
+          <div class="metric">무시: {{ operations.webhook?.ignoredEvents ?? '-' }}</div>
+        </div>
+        <p class="meta">transmission ID 중복 수신을 기록하고, 저장된 원문 기준 재처리 흐름을 확인할 수 있습니다.</p>
+      </section>
+
+      <section class="card project-card tone-violet">
+        <div class="project-head">
+          <span class="project-badge">Outbox</span>
+          <span class="project-stage">로컬 시뮬레이션</span>
+        </div>
+        <h3>트랜잭션 아웃박스</h3>
+        <div class="metrics">
+          <div class="metric">대기: {{ operations.outbox?.pendingEvents ?? '-' }}</div>
+          <div class="metric">재시도 대기: {{ operations.outbox?.retryingEvents ?? '-' }}</div>
+          <div class="metric">처리 완료: {{ operations.outbox?.publishedEvents ?? '-' }}</div>
+          <div class="metric">실패: {{ operations.outbox?.failedEvents ?? '-' }}</div>
+        </div>
+        <p class="meta">결제 변경 이벤트를 결제 트랜잭션과 함께 저장한 뒤, 버튼으로 로컬 처리 상태를 전환합니다.</p>
+      </section>
+    </div>
+  </template>
+
   <template v-else>
     <div class="section-header">
       <h2>Payment Demo Test</h2>
@@ -500,6 +801,9 @@ onMounted(async () => {
         <h2>상태 전이</h2>
         <div class="row">
           <input v-model="paymentId" placeholder="paymentId" />
+        </div>
+        <div class="row" style="margin-top: 10px">
+          <input v-model="approvalKey" placeholder="Idempotency-Key (승인용)" />
         </div>
         <p class="meta" style="margin-top: 10px">
           현재 선택: {{ selectedPayment ? `paymentId=${selectedPayment.id} / status=${selectedPayment.status}` : '아직 선택된 결제가 없습니다.' }}

@@ -31,8 +31,9 @@ class PaymentController(
     fun approvePayment(
         @PathVariable paymentId: Long,
         @RequestHeader("Idempotency-Key") approvalIdempotencyKey: String,
+        @RequestHeader(name = "Payment-Key", required = false) paymentKey: String?,
     ): ResponseEntity<CreatePaymentResponse> {
-        val approved = paymentService.approvePayment(paymentId, approvalIdempotencyKey)
+        val approved = paymentService.approvePayment(paymentId, approvalIdempotencyKey, paymentKey)
         return ResponseEntity.ok(approved)
     }
 

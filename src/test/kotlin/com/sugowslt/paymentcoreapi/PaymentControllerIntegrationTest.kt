@@ -1,9 +1,12 @@
 package com.sugowslt.paymentcoreapi
 
 import com.sugowslt.paymentcoreapi.repository.PaymentRepository
+import com.sugowslt.paymentcoreapi.repository.PaymentOutboxEventRepository
+import com.sugowslt.paymentcoreapi.repository.PaymentWebhookEventRepository
 import org.hamcrest.Matchers
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 import org.springframework.boot.test.context.SpringBootTest
@@ -13,12 +16,19 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
+import org.springframework.test.context.TestPropertySource
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@TestPropertySource(properties = ["payment.webhook.replay-token=test-replay-token"])
 class PaymentControllerIntegrationTest(
     @Autowired private val mockMvc: MockMvc,
     @Autowired private val paymentRepository: PaymentRepository,
+    @Autowired private val paymentOutboxEventRepository: PaymentOutboxEventRepository,
+    @Autowired private val paymentWebhookEventRepository: PaymentWebhookEventRepository,
 ) {
 
     companion object {
@@ -28,6 +38,8 @@ class PaymentControllerIntegrationTest(
     @BeforeEach
     fun clearPayments() {
         paymentRepository.deleteAll()
+        paymentOutboxEventRepository.deleteAll()
+        paymentWebhookEventRepository.deleteAll()
     }
 
     @Test
@@ -480,6 +492,300 @@ class PaymentControllerIntegrationTest(
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.id").value(createdId.toLong()))
             .andExpect(jsonPath("$.status").value("APPROVED"))
+    }
+
+    @Test
+    fun `concurrent approve requests with different keys allow only one approval`() {
+        val requestBody =
+            """
+            {
+              "orderId": 8011,
+              "idempotencyKey": "approve-concurrent-payment",
+              "amount": 13000.00,
+              "method": "CARD"
+            }
+            """.trimIndent()
+
+        val createResponse = mockMvc.perform(
+            post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(requestBody),
+        ).andExpect(status().isCreated).andReturn()
+
+        val createdId = "\"id\":(\\d+)".toRegex()
+            .find(createResponse.response.contentAsString)?.groupValues?.get(1)
+            ?: throw IllegalStateException("cannot parse created payment id")
+
+        val startGate = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val futures = listOf("concurrent-key-a", "concurrent-key-b").map { approvalKey ->
+                executor.submit<Int> {
+                    startGate.await()
+                    mockMvc.perform(
+                        post("/api/v1/payments/$createdId/approve")
+                            .header("Idempotency-Key", approvalKey),
+                    ).andReturn().response.status
+                }
+            }
+
+            startGate.countDown()
+            val statuses = futures.map { it.get(15, TimeUnit.SECONDS) }.sorted()
+
+            assertEquals(listOf(200, 409), statuses)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `Toss payment status webhook approves pending payment and ignores duplicate transmission`() {
+        val requestBody =
+            """
+            {
+              "orderId": 8101,
+              "idempotencyKey": "webhook-payment-8101",
+              "amount": 15000.00,
+              "method": "CARD"
+            }
+            """.trimIndent()
+
+        val createResponse = mockMvc.perform(
+            post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(requestBody),
+        ).andExpect(status().isCreated).andReturn()
+
+        val createdId = "\"id\":(\\d+)".toRegex()
+            .find(createResponse.response.contentAsString)?.groupValues?.get(1)
+            ?: throw IllegalStateException("cannot parse created payment id")
+
+        val webhookBody =
+            """
+            {
+              "eventType": "PAYMENT_STATUS_CHANGED",
+              "createdAt": "2026-07-24T18:00:00.000000",
+              "data": {
+                "paymentKey": "toss-payment-key-8101",
+                "orderId": "8101",
+                "status": "DONE"
+              }
+            }
+            """.trimIndent()
+
+        mockMvc.perform(
+            post("/api/v1/webhooks/toss/payments")
+                .header("tosspayments-webhook-transmission-id", "transmission-8101"),
+        ).andExpect(status().isBadRequest)
+
+        mockMvc.perform(
+            post("/api/v1/webhooks/toss/payments")
+                .header("tosspayments-webhook-transmission-id", "transmission-8101")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(webhookBody),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.result").value("PROCESSED_APPROVED"))
+
+        mockMvc.perform(get("/api/v1/payments/$createdId"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.status").value("APPROVED"))
+
+        mockMvc.perform(
+            post("/api/v1/webhooks/toss/payments")
+                .header("tosspayments-webhook-transmission-id", "transmission-8101")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(webhookBody),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.result").value("DUPLICATE"))
+    }
+
+    @Test
+    fun `Toss expired payment status webhook marks pending payment as failed`() {
+        val requestBody =
+            """
+            {
+              "orderId": 8102,
+              "idempotencyKey": "webhook-payment-8102",
+              "amount": 16000.00,
+              "method": "CARD"
+            }
+            """.trimIndent()
+
+        val createResponse = mockMvc.perform(
+            post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(requestBody),
+        ).andExpect(status().isCreated).andReturn()
+
+        val createdId = "\"id\":(\\d+)".toRegex()
+            .find(createResponse.response.contentAsString)?.groupValues?.get(1)
+            ?: throw IllegalStateException("cannot parse created payment id")
+
+        val webhookBody =
+            """
+            {
+              "eventType": "PAYMENT_STATUS_CHANGED",
+              "createdAt": "2026-07-24T18:01:00.000000",
+              "data": {
+                "paymentKey": "toss-payment-key-8102",
+                "orderId": "8102",
+                "status": "EXPIRED"
+              }
+            }
+            """.trimIndent()
+
+        mockMvc.perform(
+            post("/api/v1/webhooks/toss/payments")
+                .header("tosspayments-webhook-transmission-id", "transmission-8102")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(webhookBody),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.result").value("PROCESSED_FAILED"))
+
+        mockMvc.perform(get("/api/v1/payments/$createdId"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.status").value("FAILED"))
+    }
+
+    @Test
+    fun `Toss webhook returns 400 when transmission id is missing`() {
+        val webhookBody =
+            """
+            {
+              "eventType": "PAYMENT_STATUS_CHANGED",
+              "createdAt": "2026-07-24T18:02:00.000000",
+              "data": {
+                "orderId": "8103",
+                "status": "DONE"
+              }
+            }
+            """.trimIndent()
+
+        mockMvc.perform(
+            post("/api/v1/webhooks/toss/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(webhookBody),
+        )
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.code").value("INVALID_WEBHOOK"))
+    }
+
+    @Test
+    fun `protected webhook replay reprocesses an ignored event after payment is created`() {
+        val transmissionId = "replay-transmission-8110"
+        val webhookBody =
+            """
+            {
+              "eventType": "PAYMENT_STATUS_CHANGED",
+              "createdAt": "2026-07-24T18:03:00.000000",
+              "data": {
+                "paymentKey": "toss-payment-key-8110",
+                "orderId": "8110",
+                "status": "DONE"
+              }
+            }
+            """.trimIndent()
+
+        mockMvc.perform(
+            post("/api/v1/webhooks/toss/payments")
+                .header("tosspayments-webhook-transmission-id", transmissionId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(webhookBody),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.result").value("IGNORED"))
+
+        val createResponse = mockMvc.perform(
+            post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "orderId": 8110,
+                      "idempotencyKey": "replay-payment-8110",
+                      "amount": 17000.00,
+                      "method": "CARD"
+                    }
+                    """.trimIndent(),
+                ),
+        ).andExpect(status().isCreated).andReturn()
+
+        val createdId = "\"id\":(\\d+)".toRegex()
+            .find(createResponse.response.contentAsString)?.groupValues?.get(1)
+            ?: throw IllegalStateException("cannot parse created payment id")
+
+        mockMvc.perform(
+            post("/api/v1/internal/webhooks/$transmissionId/replay")
+                .header("X-Webhook-Replay-Token", "test-replay-token"),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.result").value("REPROCESSED_APPROVED"))
+
+        mockMvc.perform(get("/api/v1/payments/$createdId"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.status").value("APPROVED"))
+
+        mockMvc.perform(
+            get("/api/v1/internal/webhooks/metrics")
+                .header("X-Webhook-Replay-Token", "test-replay-token"),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.totalEvents").value(1))
+            .andExpect(jsonPath("$.reprocessedEvents").value(1))
+    }
+
+    @Test
+    fun `webhook metrics returns 403 without replay token`() {
+        mockMvc.perform(get("/api/v1/internal/webhooks/metrics"))
+            .andExpect(status().isForbidden)
+            .andExpect(jsonPath("$.code").value("WEBHOOK_REPLAY_FORBIDDEN"))
+    }
+
+    @Test
+    fun `outbox metrics shows pending event and local publish marks it published`() {
+        mockMvc.perform(
+            post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "orderId": 8111,
+                      "idempotencyKey": "outbox-payment-8111",
+                      "amount": 18000.00,
+                      "method": "CARD"
+                    }
+                    """.trimIndent(),
+                ),
+        ).andExpect(status().isCreated)
+
+        mockMvc.perform(
+            get("/api/v1/internal/outbox/metrics")
+                .header("X-Webhook-Replay-Token", "test-replay-token"),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.pendingEvents").value(1))
+            .andExpect(jsonPath("$.retryingEvents").value(0))
+            .andExpect(jsonPath("$.publishedEvents").value(0))
+
+        mockMvc.perform(
+            post("/api/v1/internal/outbox/publish")
+                .header("X-Webhook-Replay-Token", "test-replay-token"),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.pendingEvents").value(0))
+            .andExpect(jsonPath("$.retryingEvents").value(0))
+            .andExpect(jsonPath("$.publishedEvents").value(1))
+
+        mockMvc.perform(
+            get("/api/v1/internal/outbox/metrics")
+                .header("X-Webhook-Replay-Token", "test-replay-token"),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.pendingEvents").value(0))
+            .andExpect(jsonPath("$.publishedEvents").value(1))
     }
 
     @Test

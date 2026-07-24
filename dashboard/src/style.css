@@ -309,6 +309,106 @@ code {
   gap: 18px;
 }
 
+.walkthrough-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.85fr) minmax(0, 1.6fr);
+  gap: 18px;
+}
+
+.scenario-list {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.scenario-button {
+  display: grid;
+  gap: 5px;
+  text-align: left;
+  background: #f8fafc;
+  color: #0f172a;
+  border-color: #e2e8f0;
+}
+
+.scenario-button span,
+.scenario-button small {
+  color: #64748b;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.scenario-button.active {
+  background: #111827;
+  color: #fff;
+  border-color: #111827;
+}
+
+.scenario-button.active span,
+.scenario-button.active small {
+  color: #cbd5e1;
+}
+
+.scenario-run-button {
+  margin-top: 6px;
+}
+
+.flow-rail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 18px 0;
+  color: #64748b;
+  font-weight: 700;
+}
+
+.flow-node {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  text-align: center;
+  font-size: 12px;
+}
+
+.scenario-log {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 16px;
+}
+
+.scenario-log-item {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.scenario-log-item p {
+  margin: 6px 0 0;
+  color: #475569;
+  line-height: 1.6;
+}
+
+.status-pill {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #166534;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.status-pill.warning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.walkthrough-empty {
+  padding: 28px 0;
+  text-align: center;
+}
+
 .timeline {
   display: grid;
   gap: 14px;
@@ -463,6 +563,7 @@ tbody tr.selected {
 @media (max-width: 1080px) {
   .hero,
   .project-grid,
+  .walkthrough-layout,
   .two-column-grid,
   .grid,
   .demo-helper-top {
