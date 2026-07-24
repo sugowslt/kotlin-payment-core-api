@@ -255,6 +255,47 @@ class PaymentServiceTest {
     }
 
     @Test
+    fun `cancel payment returns existing response when canceled with same key`() {
+        every { paymentRepository.findByIdAndDeletedFalse(22L) } returns
+            Payment(
+                id = 22,
+                orderId = 224,
+                idempotencyKey = "cancel-unit-key-22",
+                cancellationIdempotencyKey = "cancel-key-22",
+                amount = BigDecimal("2200.00"),
+                method = PaymentMethod.CARD,
+                status = PaymentStatus.CANCELED,
+                createdAt = LocalDateTime.now(),
+            )
+
+        val result = paymentService.cancelPayment(22L, "  cancel-key-22  ")
+
+        assertEquals(PaymentStatus.CANCELED, result.status)
+        verify(exactly = 0) { paymentGateway.cancel(any()) }
+    }
+
+    @Test
+    fun `cancel payment rejects a different key after cancellation`() {
+        every { paymentRepository.findByIdAndDeletedFalse(23L) } returns
+            Payment(
+                id = 23,
+                orderId = 225,
+                idempotencyKey = "cancel-unit-key-23",
+                cancellationIdempotencyKey = "original-cancel-key-23",
+                amount = BigDecimal("2300.00"),
+                method = PaymentMethod.CARD,
+                status = PaymentStatus.CANCELED,
+                createdAt = LocalDateTime.now(),
+            )
+
+        assertThrows(InvalidPaymentStatusTransitionException::class.java) {
+            paymentService.cancelPayment(23L, "different-cancel-key-23")
+        }
+
+        verify(exactly = 0) { paymentGateway.cancel(any()) }
+    }
+
+    @Test
     fun `cancel payment keeps approved when gateway rejects cancellation`() {
         val payment = Payment(
             id = 21,

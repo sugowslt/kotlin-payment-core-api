@@ -38,8 +38,11 @@ class PaymentController(
     }
 
     @PostMapping("/{paymentId}/cancel")
-    fun cancelPayment(@PathVariable paymentId: Long): ResponseEntity<CreatePaymentResponse> {
-        val canceled = paymentService.cancelPayment(paymentId)
+    fun cancelPayment(
+        @PathVariable paymentId: Long,
+        @RequestHeader("Idempotency-Key") cancellationIdempotencyKey: String,
+    ): ResponseEntity<CreatePaymentResponse> {
+        val canceled = paymentService.cancelPayment(paymentId, cancellationIdempotencyKey)
         return ResponseEntity.ok(canceled)
     }
 

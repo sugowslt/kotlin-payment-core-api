@@ -121,7 +121,7 @@ class PaymentWebhookService(
             }
             "CANCELED" -> {
                 if (payment.status == PaymentStatus.APPROVED) {
-                    payment.cancel()
+                    payment.cancel("webhook-${event.transmissionId}")
                     paymentOutboxService.enqueuePaymentEvent(payment, "PAYMENT_CANCELED_BY_WEBHOOK")
                     "PROCESSED_CANCELED"
                 } else {

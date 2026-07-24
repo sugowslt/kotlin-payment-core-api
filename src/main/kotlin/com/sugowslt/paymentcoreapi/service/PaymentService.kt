@@ -87,9 +87,24 @@ class PaymentService(
     }
 
     @Transactional(noRollbackFor = [PaymentGatewayRejectedException::class])
-    fun cancelPayment(paymentId: Long): CreatePaymentResponse {
+    fun cancelPayment(
+        paymentId: Long,
+        cancellationIdempotencyKey: String = "payment-cancel-$paymentId",
+    ): CreatePaymentResponse {
         val payment = paymentRepository.findByIdAndDeletedFalse(paymentId)
             ?: throw PaymentNotFoundException("payment not found. id=$paymentId")
+
+        val normalizedKey = cancellationIdempotencyKey.trim()
+        require(normalizedKey.isNotEmpty()) { "Idempotency-Key must not be blank" }
+
+        if (payment.status == PaymentStatus.CANCELED) {
+            if (payment.cancellationIdempotencyKey == normalizedKey) {
+                return payment.toResponse()
+            }
+            throw InvalidPaymentStatusTransitionException(
+                "payment is already canceled with a different idempotency key",
+            )
+        }
 
         if (payment.status != PaymentStatus.APPROVED) {
             throw InvalidPaymentStatusTransitionException(
@@ -101,9 +116,10 @@ class PaymentService(
             PaymentGatewayCancellationRequest(
                 paymentId = payment.id,
                 providerTransactionId = payment.providerTransactionId,
+                cancellationIdempotencyKey = normalizedKey,
             ),
         )
-        payment.cancel()
+        payment.cancel(normalizedKey)
         paymentOutboxService.enqueuePaymentEvent(payment, "PAYMENT_CANCELED")
 
         return CreatePaymentResponse(

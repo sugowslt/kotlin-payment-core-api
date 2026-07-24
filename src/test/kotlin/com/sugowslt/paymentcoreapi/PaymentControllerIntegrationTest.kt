@@ -385,10 +385,27 @@ class PaymentControllerIntegrationTest(
         mockMvc.perform(post("/api/v1/payments/$createdId/approve").header("Idempotency-Key", "cancel-approve-1"))
             .andExpect(status().isOk)
 
-        mockMvc.perform(post("/api/v1/payments/$createdId/cancel"))
+        mockMvc.perform(
+            post("/api/v1/payments/$createdId/cancel")
+                .header("Idempotency-Key", "cancel-key-1"),
+        )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.id").value(createdId.toLong()))
             .andExpect(jsonPath("$.status").value("CANCELED"))
+
+        mockMvc.perform(
+            post("/api/v1/payments/$createdId/cancel")
+                .header("Idempotency-Key", "cancel-key-1"),
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.status").value("CANCELED"))
+
+        mockMvc.perform(
+            post("/api/v1/payments/$createdId/cancel")
+                .header("Idempotency-Key", "different-cancel-key-1"),
+        )
+            .andExpect(status().isConflict)
+            .andExpect(jsonPath("$.code").value("INVALID_PAYMENT_STATUS_TRANSITION"))
     }
 
     @Test
@@ -416,7 +433,10 @@ class PaymentControllerIntegrationTest(
         val createdId = idRegex.find(createdJson)?.groupValues?.get(1)
             ?: throw IllegalStateException("cannot parse created payment id")
 
-        mockMvc.perform(post("/api/v1/payments/$createdId/cancel"))
+        mockMvc.perform(
+            post("/api/v1/payments/$createdId/cancel")
+                .header("Idempotency-Key", "cancel-invalid-key"),
+        )
             .andExpect(status().isConflict)
             .andExpect(jsonPath("$.code").value("INVALID_PAYMENT_STATUS_TRANSITION"))
     }
@@ -448,7 +468,10 @@ class PaymentControllerIntegrationTest(
 
         mockMvc.perform(post("/api/v1/payments/$createdId/approve").header("Idempotency-Key", "approve-invalid-1"))
             .andExpect(status().isOk)
-        mockMvc.perform(post("/api/v1/payments/$createdId/cancel"))
+        mockMvc.perform(
+            post("/api/v1/payments/$createdId/cancel")
+                .header("Idempotency-Key", "cancel-approve-key-1"),
+        )
             .andExpect(status().isOk)
 
         mockMvc.perform(post("/api/v1/payments/$createdId/approve").header("Idempotency-Key", "approve-invalid-2"))

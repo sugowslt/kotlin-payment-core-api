@@ -34,6 +34,9 @@ class Payment(
     @Column(name = "approval_idempotency_key", unique = true, length = 120)
     var approvalIdempotencyKey: String? = null,
 
+    @Column(name = "cancellation_idempotency_key", unique = true, length = 120)
+    var cancellationIdempotencyKey: String? = null,
+
     @Column(name = "provider_transaction_id", unique = true, length = 120)
     var providerTransactionId: String? = null,
 
@@ -68,8 +71,9 @@ class Payment(
         updatedAt = LocalDateTime.now()
     }
 
-    fun cancel() {
+    fun cancel(cancellationIdempotencyKey: String) {
         status = PaymentStatus.CANCELED
+        this.cancellationIdempotencyKey = cancellationIdempotencyKey
         updatedAt = LocalDateTime.now()
     }
 
