@@ -6,38 +6,53 @@ import com.sugowslt.paymentcoreapi.controller.dto.PaymentOutboxRetryResponse
 import com.sugowslt.paymentcoreapi.entity.OutboxStatus
 import com.sugowslt.paymentcoreapi.entity.Payment
 import com.sugowslt.paymentcoreapi.entity.PaymentOutboxEvent
+import com.sugowslt.paymentcoreapi.entity.PaymentSettlement
 import com.sugowslt.paymentcoreapi.exception.InvalidOutboxStatusException
 import com.sugowslt.paymentcoreapi.exception.OutboxEventNotFoundException
 import com.sugowslt.paymentcoreapi.repository.PaymentOutboxEventRepository
+import com.sugowslt.paymentcoreapi.settlement.SettlementLedger
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.LocalDateTime
 
 @Service
-class PaymentOutboxService(
+class PaymentOutboxService @Autowired constructor(
     private val paymentOutboxEventRepository: PaymentOutboxEventRepository,
     private val objectMapper: ObjectMapper,
     private val paymentOutboxPublisher: PaymentOutboxPublisher,
     private val outboxOperationsProperties: OutboxOperationsProperties,
+    private val settlementLedgerService: SettlementLedger,
 ) {
+
+    constructor(
+        paymentOutboxEventRepository: PaymentOutboxEventRepository,
+        objectMapper: ObjectMapper,
+        paymentOutboxPublisher: PaymentOutboxPublisher,
+        outboxOperationsProperties: OutboxOperationsProperties,
+    ) : this(
+        paymentOutboxEventRepository,
+        objectMapper,
+        paymentOutboxPublisher,
+        outboxOperationsProperties,
+        NoopSettlementLedgerService(),
+    )
 
     @Transactional
     fun enqueuePaymentEvent(payment: Payment, eventType: String) {
-        paymentOutboxEventRepository.save(
-            PaymentOutboxEvent(
-                aggregateId = payment.id,
-                eventType = eventType,
-                payload = objectMapper.writeValueAsString(
-                    mapOf(
-                        "paymentId" to payment.id,
-                        "orderId" to payment.orderId,
-                        "status" to payment.status.name,
-                        "canceledAmount" to payment.canceledAmount,
-                        "providerTransactionId" to payment.providerTransactionId,
-                    ),
-                ),
-            ),
-        )
+        val settlement = if (eventType in APPROVAL_EVENT_TYPES) {
+            settlementLedgerService.createRequestedSnapshot(payment)
+        } else {
+            null
+        }
+
+        paymentOutboxEventRepository.save(createEvent(payment, eventType, settlement))
+
+        if (settlement != null) {
+            paymentOutboxEventRepository.save(
+                createEvent(payment, "SETTLEMENT_REQUESTED", settlement),
+            )
+        }
     }
 
     @Transactional(readOnly = true)
@@ -101,4 +116,40 @@ class PaymentOutboxService(
             nextAttemptAt = event.nextAttemptAt,
         )
     }
+
+    private fun createEvent(
+        payment: Payment,
+        eventType: String,
+        settlement: PaymentSettlement? = null,
+    ) = PaymentOutboxEvent(
+        aggregateId = payment.id,
+        eventType = eventType,
+        payload = objectMapper.writeValueAsString(
+            mapOf(
+                "paymentId" to payment.id,
+                "orderId" to payment.orderId,
+                "status" to payment.status.name,
+                "canceledAmount" to payment.canceledAmount,
+                "providerTransactionId" to payment.providerTransactionId,
+                "settlement" to settlement?.let {
+                    mapOf(
+                        "settlementId" to it.id,
+                        "grossAmount" to it.grossAmount,
+                        "feeRateBps" to it.feeRateBps,
+                        "feeAmount" to it.feeAmount,
+                        "settlementAmount" to it.settlementAmount,
+                        "status" to it.status.name,
+                    )
+                },
+            ),
+        ),
+    )
+
+    private companion object {
+        val APPROVAL_EVENT_TYPES = setOf("PAYMENT_APPROVED", "PAYMENT_APPROVED_BY_WEBHOOK")
+    }
+}
+
+private class NoopSettlementLedgerService : SettlementLedger {
+    override fun createRequestedSnapshot(payment: Payment): PaymentSettlement? = null
 }

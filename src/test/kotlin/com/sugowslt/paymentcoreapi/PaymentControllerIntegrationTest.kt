@@ -4,6 +4,7 @@ import com.sugowslt.paymentcoreapi.repository.PaymentRepository
 import com.sugowslt.paymentcoreapi.repository.PaymentCancellationRepository
 import com.sugowslt.paymentcoreapi.repository.InternalOperationAuditEventRepository
 import com.sugowslt.paymentcoreapi.repository.PaymentOutboxEventRepository
+import com.sugowslt.paymentcoreapi.repository.PaymentSettlementRepository
 import com.sugowslt.paymentcoreapi.repository.PaymentWebhookEventRepository
 import com.sugowslt.paymentcoreapi.entity.OutboxStatus
 import org.hamcrest.Matchers
@@ -26,13 +27,19 @@ import java.util.concurrent.TimeUnit
 
 @SpringBootTest
 @AutoConfigureMockMvc
-@TestPropertySource(properties = ["payment.webhook.replay-token=test-replay-token"])
+@TestPropertySource(
+    properties = [
+        "payment.webhook.replay-token=test-replay-token",
+        "payment.idempotency.redis.enabled=false",
+    ],
+)
 class PaymentControllerIntegrationTest(
     @Autowired private val mockMvc: MockMvc,
     @Autowired private val paymentRepository: PaymentRepository,
     @Autowired private val paymentCancellationRepository: PaymentCancellationRepository,
     @Autowired private val internalOperationAuditEventRepository: InternalOperationAuditEventRepository,
     @Autowired private val paymentOutboxEventRepository: PaymentOutboxEventRepository,
+    @Autowired private val paymentSettlementRepository: PaymentSettlementRepository,
     @Autowired private val paymentWebhookEventRepository: PaymentWebhookEventRepository,
 ) {
 
@@ -46,7 +53,28 @@ class PaymentControllerIntegrationTest(
         paymentCancellationRepository.deleteAll()
         internalOperationAuditEventRepository.deleteAll()
         paymentOutboxEventRepository.deleteAll()
+        paymentSettlementRepository.deleteAll()
         paymentWebhookEventRepository.deleteAll()
+    }
+
+    @Test
+    fun `health reports database and disabled redis status`() {
+        mockMvc.perform(get("/api/v1/health"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.status").value("ok"))
+            .andExpect(jsonPath("$.components.database").value("up"))
+            .andExpect(jsonPath("$.components.redis").value("disabled"))
+    }
+
+    @Test
+    fun `openapi exposes payment lifecycle contract`() {
+        mockMvc.perform(get("/api-docs"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.info.title").value("Kotlin Payment Core API"))
+            .andExpect(jsonPath("$.info.version").value("v1"))
+            .andExpect(jsonPath("$.paths['/api/v1/payments']").exists())
+            .andExpect(jsonPath("$.paths['/api/v1/payments/{paymentId}/approve'].post.summary").value("결제 승인"))
+            .andExpect(jsonPath("$.paths['/api/v1/internal/outbox/{eventId}/retry'].post.summary").value("실패 아웃박스 재시도"))
     }
 
     @Test
@@ -601,6 +629,46 @@ class PaymentControllerIntegrationTest(
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.id").value(createdId.toLong()))
             .andExpect(jsonPath("$.status").value("APPROVED"))
+    }
+
+    @Test
+    fun `approval creates settlement snapshot and settlement requested outbox event`() {
+        val createResponse = mockMvc.perform(
+            post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "orderId": 8012,
+                      "idempotencyKey": "settlement-payment-8012",
+                      "amount": 1000.00,
+                      "method": "CARD"
+                    }
+                    """.trimIndent(),
+                ),
+        ).andExpect(status().isCreated).andReturn()
+
+        val createdId = "\"id\":(\\d+)".toRegex()
+            .find(createResponse.response.contentAsString)?.groupValues?.get(1)
+            ?: throw IllegalStateException("cannot parse created payment id")
+
+        mockMvc.perform(
+            post("/api/v1/payments/$createdId/approve")
+                .header("Idempotency-Key", "settlement-approve-8012"),
+        ).andExpect(status().isOk)
+
+        val settlement = paymentSettlementRepository.findByPaymentId(createdId.toLong())
+            ?: throw IllegalStateException("settlement snapshot was not created")
+        assertEquals("1000.00", settlement.grossAmount.toPlainString())
+        assertEquals(300, settlement.feeRateBps)
+        assertEquals("30.00", settlement.feeAmount.toPlainString())
+        assertEquals("970.00", settlement.settlementAmount.toPlainString())
+        assertEquals("REQUESTED", settlement.status.name)
+
+        val eventTypes = paymentOutboxEventRepository.findAll()
+            .filter { it.aggregateId == createdId.toLong() }
+            .map { it.eventType }
+        assertEquals(listOf("PAYMENT_CREATED", "PAYMENT_APPROVED", "SETTLEMENT_REQUESTED"), eventTypes)
     }
 
     @Test

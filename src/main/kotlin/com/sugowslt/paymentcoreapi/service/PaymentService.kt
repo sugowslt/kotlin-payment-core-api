@@ -12,6 +12,7 @@ import com.sugowslt.paymentcoreapi.entity.PaymentStatus
 import com.sugowslt.paymentcoreapi.exception.DuplicatePaymentException
 import com.sugowslt.paymentcoreapi.exception.InvalidPaymentStatusTransitionException
 import com.sugowslt.paymentcoreapi.exception.InvalidPaymentCancellationException
+import com.sugowslt.paymentcoreapi.exception.PaymentIdempotencyInProgressException
 import com.sugowslt.paymentcoreapi.exception.PaymentNotFoundException
 import com.sugowslt.paymentcoreapi.gateway.PaymentGateway
 import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayApprovalRequest
@@ -23,14 +24,29 @@ import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Pageable
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.beans.factory.annotation.Autowired
 
 @Service
-class PaymentService(
+class PaymentService @Autowired constructor(
     private val paymentRepository: PaymentRepository,
     private val paymentGateway: PaymentGateway,
     private val paymentOutboxService: PaymentOutboxService,
     private val paymentCancellationRepository: PaymentCancellationRepository,
+    private val paymentIdempotencyGuard: PaymentIdempotencyGuard,
 ) {
+
+    constructor(
+        paymentRepository: PaymentRepository,
+        paymentGateway: PaymentGateway,
+        paymentOutboxService: PaymentOutboxService,
+        paymentCancellationRepository: PaymentCancellationRepository,
+    ) : this(
+        paymentRepository,
+        paymentGateway,
+        paymentOutboxService,
+        paymentCancellationRepository,
+        NoopPaymentIdempotencyGuard(),
+    )
 
     @Transactional
     fun deletePayment(paymentId: Long) {
@@ -46,49 +62,60 @@ class PaymentService(
         approvalIdempotencyKey: String,
         paymentKey: String? = null,
     ): CreatePaymentResponse {
-        val payment = paymentRepository.findByIdAndDeletedFalseForUpdate(paymentId)
-            ?: throw PaymentNotFoundException("payment not found. id=$paymentId")
-
         val normalizedKey = approvalIdempotencyKey.trim()
         require(normalizedKey.isNotEmpty()) { "Idempotency-Key must not be blank" }
 
-        if (payment.status == PaymentStatus.APPROVED) {
-            if (payment.approvalIdempotencyKey == normalizedKey) {
-                return payment.toResponse()
+        val acquireResult = paymentIdempotencyGuard.tryAcquire(paymentId, normalizedKey)
+        if (acquireResult == PaymentIdempotencyAcquireResult.InProgress) {
+            throw PaymentIdempotencyInProgressException(
+                "approval request is already in progress for payment id=$paymentId",
+            )
+        }
+
+        val lease = (acquireResult as? PaymentIdempotencyAcquireResult.Acquired)?.lease
+        try {
+            val payment = paymentRepository.findByIdAndDeletedFalseForUpdate(paymentId)
+                ?: throw PaymentNotFoundException("payment not found. id=$paymentId")
+
+            if (payment.status == PaymentStatus.APPROVED) {
+                if (payment.approvalIdempotencyKey == normalizedKey) {
+                    return payment.toResponse()
+                }
+                throw InvalidPaymentStatusTransitionException(
+                    "payment is already approved with a different idempotency key",
+                )
             }
-            throw InvalidPaymentStatusTransitionException(
-                "payment is already approved with a different idempotency key",
-            )
-        }
 
-        if (payment.status != PaymentStatus.PENDING) {
-            throw InvalidPaymentStatusTransitionException(
-                "cannot approve payment in status=${payment.status}",
-            )
-        }
+            if (payment.status != PaymentStatus.PENDING) {
+                throw InvalidPaymentStatusTransitionException(
+                    "cannot approve payment in status=${payment.status}",
+                )
+            }
 
-        val gatewayResult = try {
-            paymentGateway.approve(
-                PaymentGatewayApprovalRequest(
-                    paymentId = payment.id,
-                    orderId = payment.orderId,
-                    amount = payment.amount,
-                    method = payment.method,
-                    approvalIdempotencyKey = normalizedKey,
-                    paymentKey = paymentKey?.trim()?.takeUnless { it.isNullOrBlank() },
-                ),
-            )
-        } catch (ex: PaymentGatewayRejectedException) {
+            val gatewayResult = try {
+                paymentGateway.approve(
+                    PaymentGatewayApprovalRequest(
+                        paymentId = payment.id,
+                        orderId = payment.orderId,
+                        amount = payment.amount,
+                        method = payment.method,
+                        approvalIdempotencyKey = normalizedKey,
+                        paymentKey = paymentKey?.trim()?.takeUnless { it.isNullOrBlank() },
+                    ),
+                )
+            } catch (ex: PaymentGatewayRejectedException) {
+                payment.approvalIdempotencyKey = normalizedKey
+                payment.markFailed()
+                throw ex
+            }
+
             payment.approvalIdempotencyKey = normalizedKey
-            payment.markFailed()
-            throw ex
+            payment.approve(gatewayResult.providerTransactionId)
+            paymentOutboxService.enqueuePaymentEvent(payment, "PAYMENT_APPROVED")
+            return payment.toResponse()
+        } finally {
+            lease?.let(paymentIdempotencyGuard::release)
         }
-
-        payment.approvalIdempotencyKey = normalizedKey
-        payment.approve(gatewayResult.providerTransactionId)
-        paymentOutboxService.enqueuePaymentEvent(payment, "PAYMENT_APPROVED")
-
-        return payment.toResponse()
     }
 
     @Transactional(noRollbackFor = [PaymentGatewayRejectedException::class])

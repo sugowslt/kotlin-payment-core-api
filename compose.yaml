@@ -1,0 +1,58 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: payment-core-api-compose
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_URL: jdbc:mysql://mysql:3306/payment_core?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USERNAME: payment
+      DB_PASSWORD: payment-password
+      PAYMENT_GATEWAY_PROVIDER: local
+      PAYMENT_WEBHOOK_REPLAY_TOKEN: local-compose-test-token
+      PAYMENT_OUTBOX_WORKER_ENABLED: "false"
+      REDIS_URL: redis://redis:6379
+      PAYMENT_IDEMPOTENCY_REDIS_ENABLED: "true"
+    ports:
+      - "8080:8080"
+
+  mysql:
+    image: mysql:8.0
+    container_name: payment-core-mysql-compose
+    environment:
+      MYSQL_DATABASE: payment_core
+      MYSQL_USER: payment
+      MYSQL_PASSWORD: payment-password
+      MYSQL_ROOT_PASSWORD: root-password
+    ports:
+      - "3308:3306"
+    volumes:
+      - payment-core-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-proot-password"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: payment-core-redis-compose
+    ports:
+      - "6379:6379"
+    volumes:
+      - payment-core-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  payment-core-mysql-data:
+  payment-core-redis-data:

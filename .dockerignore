@@ -1,0 +1,7 @@
+.git
+.gradle
+build
+dashboard/node_modules
+dashboard/dist
+*.log
+.env

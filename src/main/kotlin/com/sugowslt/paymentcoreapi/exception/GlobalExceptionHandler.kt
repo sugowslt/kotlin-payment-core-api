@@ -111,6 +111,23 @@ class GlobalExceptionHandler {
             )
     }
 
+    @ExceptionHandler(PaymentIdempotencyInProgressException::class)
+    fun handlePaymentIdempotencyInProgress(
+        ex: PaymentIdempotencyInProgressException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(
+                ApiErrorResponse(
+                    timestamp = LocalDateTime.now(),
+                    code = "PAYMENT_IDEMPOTENCY_IN_PROGRESS",
+                    message = ex.message ?: "payment idempotency request is already in progress",
+                    path = request.requestURI,
+                    traceId = traceIdOf(request),
+                ),
+            )
+    }
+
     @ExceptionHandler(InvalidWebhookException::class)
     fun handleInvalidWebhook(
         ex: InvalidWebhookException,

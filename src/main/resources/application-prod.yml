@@ -1,7 +1,18 @@
 spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: ${DB_DRIVER_CLASS:com.mysql.cj.jdbc.Driver}
   jpa:
     hibernate:
       ddl-auto: validate
+    database-platform: ${JPA_DIALECT:org.hibernate.dialect.MySQLDialect}
+  flyway:
+    locations: ${SPRING_FLYWAY_LOCATIONS:classpath:db/migration/mysql}
+  data:
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
 
 payment:
   gateway:
@@ -12,3 +23,9 @@ payment:
   outbox:
     worker:
       enabled: ${PAYMENT_OUTBOX_WORKER_ENABLED:true}
+  idempotency:
+    redis:
+      enabled: ${PAYMENT_IDEMPOTENCY_REDIS_ENABLED:true}
+      ttl-seconds: ${PAYMENT_IDEMPOTENCY_REDIS_TTL_SECONDS:30}
+  settlement:
+    fee-rate-bps: ${PAYMENT_SETTLEMENT_FEE_RATE_BPS:300}

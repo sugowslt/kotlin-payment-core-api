@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "node server.js viewer.html",
-    "start": "node server.js viewer.html"
+    "start": "node server.js viewer.html",
+    "load-test": "node scripts/load-test.mjs"
   }
 }

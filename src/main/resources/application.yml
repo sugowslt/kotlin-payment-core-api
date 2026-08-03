@@ -5,6 +5,8 @@
 spring:
   application:
     name: kotlin-payment-core-api
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
   datasource:
     url: ${DB_URL:jdbc:h2:mem:payment_core;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE}
     username: ${DB_USERNAME:sa}
@@ -12,15 +14,22 @@ spring:
     driver-class-name: ${DB_DRIVER_CLASS:org.h2.Driver}
   jpa:
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: validate
     properties:
       hibernate:
         format_sql: true
     database-platform: ${JPA_DIALECT:org.hibernate.dialect.H2Dialect}
     open-in-view: false
+  flyway:
+    enabled: ${SPRING_FLYWAY_ENABLED:true}
+    locations: ${SPRING_FLYWAY_LOCATIONS:classpath:db/migration/h2}
+  data:
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
 
 server:
   port: 8080
+  shutdown: graceful
 
 logging:
   level:
@@ -45,6 +54,7 @@ payment:
   webhook:
     # 로컬 대시보드 확인용 기본값입니다. 운영 환경에서는 반드시 환경변수로 교체합니다.
     replay-token: ${PAYMENT_WEBHOOK_REPLAY_TOKEN:local-dashboard-replay-token}
+    max-token-length: ${PAYMENT_WEBHOOK_REPLAY_TOKEN_MAX_LENGTH:256}
   outbox:
     max-retries: ${PAYMENT_OUTBOX_MAX_RETRIES:3}
     retry-delay-seconds: ${PAYMENT_OUTBOX_RETRY_DELAY_SECONDS:30}
@@ -52,3 +62,9 @@ payment:
       # 대시보드 데모와 수동 검증을 위해 기본값은 비활성화합니다.
       enabled: ${PAYMENT_OUTBOX_WORKER_ENABLED:false}
       fixed-delay-ms: ${PAYMENT_OUTBOX_WORKER_FIXED_DELAY_MS:30000}
+  idempotency:
+    redis:
+      enabled: ${PAYMENT_IDEMPOTENCY_REDIS_ENABLED:false}
+      ttl-seconds: ${PAYMENT_IDEMPOTENCY_REDIS_TTL_SECONDS:30}
+  settlement:
+    fee-rate-bps: ${PAYMENT_SETTLEMENT_FEE_RATE_BPS:300}

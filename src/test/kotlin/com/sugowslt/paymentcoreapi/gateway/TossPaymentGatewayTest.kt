@@ -13,6 +13,10 @@ import org.springframework.test.web.client.match.MockRestRequestMatchers.method
 import org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo
 import org.springframework.test.web.client.response.MockRestResponseCreators.withServerError
 import org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess
+import org.springframework.test.web.client.response.MockRestResponseCreators.withException
+import org.springframework.test.web.client.response.MockRestResponseCreators.withStatus
+import org.springframework.http.HttpStatus
+import java.io.IOException
 import org.springframework.web.client.RestClient
 import java.math.BigDecimal
 import java.nio.charset.StandardCharsets
@@ -111,6 +115,73 @@ class TossPaymentGatewayTest {
         val result = gateway.approve(request)
 
         assertEquals("toss-payment-key-2", result.providerTransactionId)
+        server.verify()
+    }
+
+    @Test
+    fun `approve maps client error to rejection without retry`() {
+        val builder = RestClient.builder().baseUrl("http://localhost")
+        val server = MockRestServiceServer.bindTo(builder).build()
+        val gateway = TossPaymentGateway(
+            properties = TossPaymentGatewayProperties(
+                baseUrl = "http://localhost",
+                secretKey = "test_sk_example",
+                maxRetries = 3,
+            ),
+            restClient = builder.build(),
+        )
+
+        server.expect(requestTo("http://localhost/v1/payments/confirm"))
+            .andExpect(method(org.springframework.http.HttpMethod.POST))
+            .andRespond(withStatus(HttpStatus.BAD_REQUEST))
+
+        assertThrows(PaymentGatewayRejectedException::class.java) {
+            gateway.approve(
+                PaymentGatewayApprovalRequest(
+                    paymentId = 6,
+                    orderId = 106,
+                    amount = BigDecimal("6000.00"),
+                    method = PaymentMethod.CARD,
+                    approvalIdempotencyKey = "approval-key-6",
+                    paymentKey = "toss-payment-key-6",
+                ),
+            )
+        }
+
+        server.verify()
+    }
+
+    @Test
+    fun `approve maps timeout to unavailable after configured retries`() {
+        val builder = RestClient.builder().baseUrl("http://localhost")
+        val server = MockRestServiceServer.bindTo(builder).build()
+        val gateway = TossPaymentGateway(
+            properties = TossPaymentGatewayProperties(
+                baseUrl = "http://localhost",
+                secretKey = "test_sk_example",
+                maxRetries = 1,
+            ),
+            restClient = builder.build(),
+        )
+        val request = PaymentGatewayApprovalRequest(
+            paymentId = 7,
+            orderId = 107,
+            amount = BigDecimal("7000.00"),
+            method = PaymentMethod.CARD,
+            approvalIdempotencyKey = "approval-key-7",
+            paymentKey = "toss-payment-key-7",
+        )
+
+        repeat(2) {
+            server.expect(requestTo("http://localhost/v1/payments/confirm"))
+                .andExpect(method(org.springframework.http.HttpMethod.POST))
+                .andRespond(withException(IOException("timeout")))
+        }
+
+        assertThrows(PaymentGatewayUnavailableException::class.java) {
+            gateway.approve(request)
+        }
+
         server.verify()
     }
 

@@ -8,6 +8,8 @@ import com.sugowslt.paymentcoreapi.controller.dto.GetPaymentsResponse
 import com.sugowslt.paymentcoreapi.controller.dto.PaymentSummary
 import com.sugowslt.paymentcoreapi.service.PaymentService
 import jakarta.validation.Valid
+import io.swagger.v3.oas.annotations.Operation
+import io.swagger.v3.oas.annotations.tags.Tag
 import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Sort
 import org.springframework.http.HttpStatus
@@ -24,11 +26,13 @@ import org.springframework.web.bind.annotation.RestController
 
 @RestController
 @RequestMapping("/api/v1/payments")
+@Tag(name = "Payments", description = "결제 생성, 조회, 승인, 취소 API")
 class PaymentController(
     private val paymentService: PaymentService,
 ) {
 
     @PostMapping("/{paymentId}/approve")
+    @Operation(summary = "결제 승인", description = "Idempotency-Key로 승인 재요청을 안전하게 처리합니다.")
     fun approvePayment(
         @PathVariable paymentId: Long,
         @RequestHeader("Idempotency-Key") approvalIdempotencyKey: String,
@@ -39,6 +43,7 @@ class PaymentController(
     }
 
     @PostMapping("/{paymentId}/cancel")
+    @Operation(summary = "결제 취소", description = "Idempotency-Key와 선택적 부분 취소 금액으로 결제를 취소합니다.")
     fun cancelPayment(
         @PathVariable paymentId: Long,
         @RequestHeader("Idempotency-Key") cancellationIdempotencyKey: String,
@@ -53,12 +58,14 @@ class PaymentController(
     }
 
     @DeleteMapping("/{paymentId}")
+    @Operation(summary = "결제 삭제", description = "결제를 soft delete 처리합니다.")
     fun deletePayment(@PathVariable paymentId: Long): ResponseEntity<Void> {
         paymentService.deletePayment(paymentId)
         return ResponseEntity.noContent().build()
     }
 
     @GetMapping
+    @Operation(summary = "결제 목록 조회", description = "createdAt 내림차순의 offset 기반 결제 목록을 조회합니다.")
     fun getPayments(
         @RequestParam(defaultValue = "0") page: Int,
         @RequestParam(defaultValue = "20") size: Int,
@@ -69,6 +76,7 @@ class PaymentController(
     }
 
     @GetMapping("/cursor")
+    @Operation(summary = "결제 cursor 조회", description = "payment id keyset cursor 기반으로 다음 결제 페이지를 조회합니다.")
     fun getPaymentsByCursor(
         @RequestParam(required = false) cursorId: Long?,
         @RequestParam(defaultValue = "20") size: Int,
@@ -78,12 +86,14 @@ class PaymentController(
     }
 
     @GetMapping("/{paymentId}")
+    @Operation(summary = "결제 단건 조회")
     fun getPayment(@PathVariable paymentId: Long): ResponseEntity<CreatePaymentResponse> {
         val payment = paymentService.getPayment(paymentId)
         return ResponseEntity.ok(payment)
     }
 
     @PostMapping
+    @Operation(summary = "결제 생성", description = "주문 식별자와 결제 금액을 검증한 뒤 PENDING 결제를 생성합니다.")
     fun createPayment(@Valid @RequestBody request: CreatePaymentRequest): ResponseEntity<CreatePaymentResponse> {
         val created = paymentService.createPayment(request)
         return ResponseEntity.status(HttpStatus.CREATED).body(created)

@@ -6,6 +6,7 @@ import com.sugowslt.paymentcoreapi.entity.PaymentMethod
 import com.sugowslt.paymentcoreapi.entity.PaymentStatus
 import com.sugowslt.paymentcoreapi.exception.DuplicatePaymentException
 import com.sugowslt.paymentcoreapi.exception.InvalidPaymentStatusTransitionException
+import com.sugowslt.paymentcoreapi.exception.PaymentIdempotencyInProgressException
 import com.sugowslt.paymentcoreapi.exception.PaymentNotFoundException
 import com.sugowslt.paymentcoreapi.gateway.PaymentGateway
 import com.sugowslt.paymentcoreapi.gateway.PaymentGatewayApprovalResult
@@ -16,9 +17,12 @@ import com.sugowslt.paymentcoreapi.repository.PaymentRepository
 import com.sugowslt.paymentcoreapi.repository.PaymentCancellationRepository
 import com.sugowslt.paymentcoreapi.service.PaymentService
 import com.sugowslt.paymentcoreapi.service.PaymentOutboxService
+import com.sugowslt.paymentcoreapi.service.PaymentIdempotencyAcquireResult
+import com.sugowslt.paymentcoreapi.service.PaymentIdempotencyGuard
 import io.mockk.MockKAnnotations
 import io.mockk.every
 import io.mockk.impl.annotations.MockK
+import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -160,6 +164,25 @@ class PaymentServiceTest {
         assertEquals(PaymentStatus.APPROVED, result.status)
         verify(exactly = 1) { paymentGateway.approve(any()) }
         verify(exactly = 1) { paymentRepository.findByIdAndDeletedFalseForUpdate(10L) }
+    }
+
+    @Test
+    fun `approve rejects redis in progress before acquiring database lock`() {
+        val guard = mockk<PaymentIdempotencyGuard>()
+        every { guard.tryAcquire(99L, "same-key-99") } returns PaymentIdempotencyAcquireResult.InProgress
+        val service = PaymentService(
+            paymentRepository,
+            paymentGateway,
+            paymentOutboxService,
+            paymentCancellationRepository,
+            guard,
+        )
+
+        assertThrows(PaymentIdempotencyInProgressException::class.java) {
+            service.approvePayment(99L, "same-key-99")
+        }
+
+        verify(exactly = 0) { paymentRepository.findByIdAndDeletedFalseForUpdate(99L) }
     }
 
     @Test

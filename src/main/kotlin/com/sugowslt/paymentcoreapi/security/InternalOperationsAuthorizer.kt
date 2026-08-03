@@ -13,7 +13,13 @@ class InternalOperationsAuthorizer(
 
     fun authorize(requestToken: String?) {
         val configuredToken = webhookOperationsProperties.replayToken
-        if (configuredToken.isBlank() || requestToken.isNullOrBlank()) {
+        val maxTokenLength = webhookOperationsProperties.maxTokenLength.coerceAtLeast(1)
+        if (
+            configuredToken.isBlank() ||
+            configuredToken.length > maxTokenLength ||
+            requestToken.isNullOrBlank() ||
+            requestToken.length > maxTokenLength
+        ) {
             throw WebhookReplayAccessDeniedException()
         }
 
