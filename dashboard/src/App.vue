@@ -4,6 +4,7 @@ import {
   approvePayment,
   cancelPayment,
   createPayment,
+  getAuditEvents,
   getOutboxMetrics,
   getPaymentsCursor,
   getWebhookMetrics,
@@ -14,7 +15,7 @@ import {
 } from './api'
 
 const activeView = ref('walkthrough')
-const operations = ref({ webhook: null, outbox: null })
+const operations = ref({ webhook: null, outbox: null, audit: [] })
 const operationsLoading = ref(false)
 const operationsError = ref('')
 const operationsMessage = ref('')
@@ -425,8 +426,12 @@ async function loadOperations() {
   operationsLoading.value = true
   operationsError.value = ''
   try {
-    const [webhook, outbox] = await Promise.all([getWebhookMetrics(), getOutboxMetrics()])
-    operations.value = { webhook: webhook.body, outbox: outbox.body }
+    const [webhook, outbox, audit] = await Promise.all([
+      getWebhookMetrics(),
+      getOutboxMetrics(),
+      getAuditEvents(),
+    ])
+    operations.value = { webhook: webhook.body, outbox: outbox.body, audit: audit.body }
   } catch (error) {
     operationsError.value = `${error.message} / traceId=${error.traceId ?? '-'}`
   } finally {
@@ -750,6 +755,46 @@ onMounted(async () => {
         <p class="meta">결제 변경 이벤트를 결제 트랜잭션과 함께 저장하고, 실패 이벤트는 eventId를 지정해 수동 재처리 대기열로 되돌릴 수 있습니다.</p>
       </section>
     </div>
+
+    <section class="card section">
+      <div class="section-header compact">
+        <div>
+          <h2>최근 운영 감사 이력</h2>
+          <p class="meta">수동 운영 작업의 결과·대상·traceId를 최근 50건까지 확인합니다.</p>
+        </div>
+      </div>
+      <div v-if="operations.audit.length === 0" class="empty-state meta">
+        아직 기록된 운영 감사 이력이 없습니다.
+      </div>
+      <div v-else class="table-wrapper">
+        <table class="audit-table">
+          <thead>
+            <tr>
+              <th>시각</th>
+              <th>작업</th>
+              <th>대상</th>
+              <th>결과</th>
+              <th>traceId</th>
+              <th>상세</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="event in operations.audit" :key="event.id">
+              <td>{{ event.createdAt }}</td>
+              <td>{{ event.operation }}</td>
+              <td>{{ event.targetId || '-' }}</td>
+              <td>
+                <span :class="['status-pill', { warning: event.outcome !== 'SUCCESS' }]">
+                  {{ event.outcome }}
+                </span>
+              </td>
+              <td>{{ event.traceId || '-' }}</td>
+              <td>{{ event.detail || '-' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   </template>
 
   <template v-else>

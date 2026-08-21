@@ -121,6 +121,12 @@ export async function getOutboxMetrics() {
   }, '아웃박스 지표 조회')
 }
 
+export async function getAuditEvents() {
+  return requestJson('/api/v1/internal/audit-events', {
+    headers: operationsHeaders(),
+  }, '운영 감사 이력 조회')
+}
+
 export async function publishOutbox() {
   return requestJson('/api/v1/internal/outbox/publish', {
     method: 'POST',

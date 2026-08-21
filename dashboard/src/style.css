@@ -521,6 +521,15 @@ table {
   table-layout: fixed;
 }
 
+.audit-table {
+  min-width: 820px;
+}
+
+.audit-table th,
+.audit-table td {
+  word-break: break-word;
+}
+
 th,
 td {
   text-align: left;
