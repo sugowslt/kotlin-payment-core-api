@@ -603,7 +603,7 @@ onMounted(async () => {
         <div class="project-head"><span class="project-badge">운영 근거</span><span class="project-stage">문서화</span></div>
         <h3>검증과 의사결정</h3>
         <p class="project-highlight">H2/MySQL 테스트, ADR, 트러블슈팅 기록을 연결해 구현뿐 아니라 선택 이유와 장애 대응 과정까지 설명합니다.</p>
-        <div class="chip-list"><span class="chip">39 Tests</span><span class="chip">ADR</span><span class="chip">Troubleshooting</span></div>
+        <div class="chip-list"><span class="chip">75 Tests</span><span class="chip">ADR</span><span class="chip">Troubleshooting</span></div>
       </article>
     </section>
   </template>
